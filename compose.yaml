@@ -19,6 +19,9 @@ services:
     labels:
       app: IguanaXterm
     restart: unless-stopped
+    # Podman only. Makes the container's user (uid 10001, gid 999) be you on
+    # the host, so files saved into the downloads folder are yours.
+    userns_mode: "keep-id:uid=10001,gid=999"
     ports:
       # Loopback only. pytincture refuses authenticated plain HTTP anywhere
       # else, so reaching this from another machine needs TLS and the two
@@ -30,8 +33,13 @@ services:
       - GANXTERM_DATA_DIR=/data
       - GANXTERM_CANONICAL_ORIGIN=${GANXTERM_CANONICAL_ORIGIN:-http://127.0.0.1:8765}
       - GANXTERM_ALLOWED_HOSTS=${GANXTERM_ALLOWED_HOSTS:-}
+      - GANXTERM_DOWNLOAD_DIR=/downloads
     volumes:
-      - ganxterm_data:/data
+      # :U re-owns the volume to the mapped user above.
+      - ganxterm_data:/data:U
+      # Folder downloads a browser cannot write itself (Firefox, or any
+      # non-https origin). A dedicated folder: :z relabels it for SELinux.
+      - ${GANXTERM_DOWNLOAD_HOST_DIR:-~/Downloads/IguanaXterm}:/downloads:z
 
 volumes:
   # Not iguanaxterm_data: that name is taken by a root-owned volume left over

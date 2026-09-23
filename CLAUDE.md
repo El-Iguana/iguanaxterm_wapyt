@@ -19,7 +19,10 @@ Siblings under `~/Development/Pytinc/`, each with its own `CLAUDE.md`:
 - `iguanaxterm_pyt/` — the abandoned dhxpyt attempt. Reference only.
 
 The original app is at `~/Development/workspace/iguanaxterm`
-(github.com/El-Iguana/iguanaxterm) and is still the feature reference.
+(github.com/El-Iguana/iguanaxterm). **It is retired (2026-09-23)**: this
+rewrite passed its feature list, and its last unique feature (folder downloads
+saved on the server) was ported. It is no longer the feature reference. Its
+local checkout is behind `origin/main`, so read the remote if you need it.
 
 ## Layout
 
@@ -85,10 +88,11 @@ the "pool" dialled a new SSH connection on every file-browser action and never
 closed any of them. Measured on the test target: one Files open plus five
 refreshes meant **7 logins and ~14 live sshd sessions**, against 2 logins after
 the fix. The unit tests all passed throughout, because they import the module
-once.
+once. The same thing made the first server-side download report "No such
+download" on its first status poll.
 
 **Rule: state that must persist lives in a plain module**: `services/pool.py`
-(both pools, the walk executor). BFF modules
+(both pools, the walk executor) or `services/download_jobs.py`. BFF modules
 import it from there; a normal import is cached in `sys.modules`.
 `tests/test_bff_state.py` loads the BFF modules with pytincture's own loader,
 twice, to prove it. It also fails if any BFF module grows a module-level
@@ -232,6 +236,31 @@ replaces the first.
 Not handled: files that already exist in the chosen destination are still
 overwritten, as on every platform, and Windows' 260-character path limit is not
 checked.
+
+### Folder downloads without a folder picker are saved on the server
+
+Firefox has no File System Access pickers, and no browser offers them on a
+non-secure origin. There a folder download is copied into
+`GANXTERM_DOWNLOAD_DIR/<username>/` on the server instead (`download_jobs.py`),
+and **Saved files** in the toolbar browses it, fetches files back to the
+browser and deletes. Plain files in the same selection still go straight to
+the browser's downloads. Chrome and Edge are unchanged: they get the picker.
+
+- **A job, not a stream.** pytincture caps a `@bff_stream` at 300 s total and
+  30 s between items (`BFF_STREAM_MAX_SECONDS`, `..._IDLE_TIMEOUT_SECONDS`), and
+  a folder of photos outlasts that. The copy runs on its own thread; the page
+  starts it, polls `status` every 0.8 s and can `cancel`. Closing the tab does
+  not stop it.
+- Files are written as `name.part` and renamed when complete. A second save of
+  the same folder becomes `Amber (2)`, never a merge into the first copy.
+- `resolve_inside` resolves symlinks before its containment check, so neither
+  `..` nor a link inside the folder leads out of it.
+- **The container maps its user to you.** `--userns=keep-id:uid=10001,gid=999`
+  makes the image's user *be* the host user, so saved files are yours to open
+  and delete. `:U` on the data volume re-owns it to match, which was tested on
+  a copy of the real volume first. `:z` on the downloads mount is for
+  SELinux; without it the container gets "Permission denied". Only ever `:z`
+  a dedicated folder, never `~/Downloads` itself.
 
 ### No CDN, ever
 

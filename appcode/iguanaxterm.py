@@ -52,6 +52,7 @@ from wapyt import (
     TreeItem,
 )
 
+from services.downloads import DownloadService
 from services.layout_service import LayoutService
 from services.paths import (
     SESSION_TYPES,
@@ -91,6 +92,9 @@ TERMINAL_THEME = TerminalTheme(
 _RECONNECT_WAIT_SECONDS = 15
 _RECONNECT_GAP_SECONDS = 0.3
 
+# How often a server-side folder save is polled for progress.
+_SAVE_POLL_SECONDS = 0.8
+
 _TOOLBAR_BUTTONS = (
     ("new", "New", "mdi-plus-circle"),
     ("edit", "Edit", "mdi-pencil"),
@@ -98,6 +102,7 @@ _TOOLBAR_BUTTONS = (
     ("|", "", ""),
     ("connect", "Connect", "mdi-connection"),
     ("sftp", "Files", "mdi-folder-network"),
+    ("saved", "Saved files", "mdi-tray-arrow-down"),
     ("|", "", ""),
     ("users", "Users", "mdi-account-group"),
     ("password", "Password", "mdi-key"),
@@ -482,6 +487,8 @@ class IguanaXterm(MainWindow):
             _spawn(self._admin_panel(), "admin panel")
         elif action == "password":
             self._password_dialog()
+        elif action == "saved":
+            _spawn(self._saved_panel(), "saved files")
         elif action == "reconnect_all":
             _spawn(self._reconnect_all(), "reconnect all")
         elif self._selected_id is None:
@@ -1541,17 +1548,16 @@ class IguanaXterm(MainWindow):
         # doing something different. The original app learned this the hard way
         # — a silent fallback produced one Save-As dialog per file.
         if not caps.pickers:
-            if folders:
-                self._toast(
-                    "This browser cannot choose a destination folder, so whole "
-                    "folders cannot be downloaded. Chrome or Edge can."
-                )
-                return
             for row in files:
                 filetransfer.download_via_anchor(
                     self._download_url(entry["session_id"], row["id"]), row["name"]
                 )
-            self._toast(f"Sent {len(files)} file(s) to your downloads folder.")
+            if files and not folders:
+                self._toast(f"Sent {len(files)} file(s) to your downloads folder.")
+            # A folder cannot be written through this browser, so it is saved
+            # on the server instead, and fetched from Saved files.
+            for folder in folders:
+                await self._save_to_server(tab_id, entry["session_id"], folder)
             return
 
         # One plain file gets a Save dialog with a pre-filled name; anything
@@ -1601,6 +1607,143 @@ class IguanaXterm(MainWindow):
             tab_id, jobs, folder_id=chosen.id, renamed=names.renamed
         )
         filetransfer.release(chosen.id)
+
+    async def _save_to_server(self, tab_id: str, session_id: int, folder: dict) -> None:
+        """
+        Copy a remote folder into this user's downloads folder on the server.
+
+        The copy is a server-side job, not a stream, because pytincture caps a
+        stream at five minutes and a folder of photos outlasts that. This
+        polls it; closing the page does not stop it.
+        """
+        started = await DownloadService().start_async(session_id, folder["id"])
+        if not started.get("ok"):
+            self._toast(started.get("error") or "Could not start saving the folder.")
+            return
+        job = started["job"]
+        job_id = job["id"]
+
+        def _cancel() -> None:
+            _spawn(DownloadService().cancel_async(job_id), "cancel server save")
+
+        transfer_id = self._queue_add(
+            tab_id, f"{folder['name']} → server", "download", on_cancel=_cancel
+        )
+        progress = self._queue_progress(tab_id, transfer_id)
+        status = js.document.getElementById(f"st-{tab_id}-{transfer_id}")
+
+        while job["state"] in ("walking", "copying"):
+            if status and job["state"] == "walking":
+                status.textContent = f"scanning… {job['files_total']} file(s)"
+            elif job["bytes_total"]:
+                progress(job["bytes_done"], job["bytes_total"])
+            await asyncio.sleep(_SAVE_POLL_SECONDS)
+            polled = await DownloadService().status_async(job_id)
+            if not polled.get("ok"):
+                self._queue_finish(tab_id, transfer_id, "failed", polled.get("error", ""))
+                return
+            job = polled["job"]
+
+        where = f"Saved files › {job['folder']}"
+        if job["state"] == "done":
+            detail = f"{job['files_done']} file(s)"
+            if job["failed_count"]:
+                detail += f", {job['failed_count']} failed"
+            self._queue_finish(tab_id, transfer_id, "done", detail)
+            self._toast(f"Saved {job['files_done']} file(s) on the server: {where}.")
+        elif job["state"] == "cancelled":
+            self._queue_finish(tab_id, transfer_id, "cancelled",
+                               f"cancelled after {job['files_done']} file(s)")
+        else:
+            self._queue_finish(tab_id, transfer_id, "failed", job.get("error") or "failed")
+
+    async def _saved_panel(self) -> None:
+        """Browse, fetch and delete what has been saved on the server."""
+        modal = ModalWindow(ModalConfig(title="Saved files on the server", width=760, height=560))
+        modal.body.innerHTML = (
+            '<div class="ix-saved">'
+            '  <div class="ix-saved-bar">'
+            '    <button type="button" class="ix-sftp-btn" data-saved="up" title="Up one folder">'
+            '      <span class="mdi mdi-arrow-up"></span></button>'
+            '    <span class="ix-saved-path" id="ix-saved-path">/</span>'
+            '    <button type="button" class="ix-sftp-btn" data-saved="download"'
+            '            title="Download the selected files to this browser">'
+            '      <span class="mdi mdi-download"></span><span>Download</span></button>'
+            '    <button type="button" class="ix-sftp-btn" data-saved="delete"'
+            '            title="Delete the selection from the server">'
+            '      <span class="mdi mdi-delete"></span><span>Delete</span></button>'
+            '  </div>'
+            '  <div class="ix-saved-table" id="ix-saved-table"></div>'
+            f"</div><style>{_SAVED_CSS}</style>"
+        )
+        table = DataTable(
+            DataTableConfig(
+                columns=[
+                    ColumnConfig(id="icon", header="", type="icon", width=34, sortable=False),
+                    ColumnConfig(id="name", header="Name"),
+                    ColumnConfig(id="size", header="Size", width=100, align="right", sort_by="size_bytes"),
+                    ColumnConfig(id="modified", header="Modified", width=150, sort_by="mtime"),
+                ],
+                id_field="id",
+                selection="multi",
+                group_dirs_first="is_dir",
+                sort_by="name",
+                empty_text="Nothing saved yet. Folders downloaded in a browser that "
+                           "cannot choose a destination are saved here.",
+            ),
+            container=js.document.getElementById("ix-saved-table"),
+        )
+        state = {"path": "/"}
+
+        async def _show(path: str) -> None:
+            listing = await DownloadService().list_async(path)
+            if not listing.get("ok"):
+                self._toast(listing.get("error") or "Could not read the downloads folder.")
+                return
+            state["path"] = listing["path"]
+            label = js.document.getElementById("ix-saved-path")
+            if label:
+                label.textContent = listing["path"]
+            table.set_rows(listing["entries"])
+
+        def _selected_rows() -> list:
+            return [table.get_row(i) or {} for i in table.get_selected_ids()]
+
+        async def _delete(rows: list) -> None:
+            if not rows or not js.confirm(f"Delete {len(rows)} item(s) from the server?"):
+                return
+            result = await DownloadService().delete_async([r["id"] for r in rows])
+            if not result.get("ok"):
+                self._toast(result["failed"][0]["error"] if result.get("failed") else "Delete failed")
+            await _show(state["path"])
+
+        def _on_click(event) -> None:
+            button = event.target.closest("[data-saved]")
+            if not button:
+                return
+            action = button.dataset.saved
+            if action == "up":
+                parent = state["path"].rstrip("/").rsplit("/", 1)[0] or "/"
+                _spawn(_show(parent), "saved files up")
+            elif action == "download":
+                files = [r for r in _selected_rows() if r and not r.get("is_dir")]
+                if not files:
+                    self._toast("Select files to download. Open a folder to see its files.")
+                    return
+                for row in files:
+                    filetransfer.download_via_anchor(
+                        f"/downloads/file?path={js.encodeURIComponent(row['id'])}", row["name"]
+                    )
+            elif action == "delete":
+                _spawn(_delete(_selected_rows()), "saved files delete")
+
+        modal.body.addEventListener("click", create_proxy(_on_click))
+        table.on_activate(
+            lambda payload: _spawn(_show(payload["row"]["id"]), "saved files open")
+            if (payload.get("row") or {}).get("is_dir") else None
+        )
+        modal.show()
+        await _show("/")
 
     async def _expand_folder(self, session_id: int, folder: dict) -> list:
         """
@@ -1751,7 +1894,7 @@ class IguanaXterm(MainWindow):
     # second, and DataTable re-renders every row on set_rows, which would thrash
     # the whole table. Here each row's own bar is mutated in place.
 
-    def _queue_add(self, tab_id: str, label: str, kind: str) -> str:
+    def _queue_add(self, tab_id: str, label: str, kind: str, on_cancel=None) -> str:
         self._transfer_seq = getattr(self, "_transfer_seq", 0) + 1
         transfer_id = f"tx{self._transfer_seq}"
 
@@ -1794,9 +1937,10 @@ class IguanaXterm(MainWindow):
         stop.className = "ix-queue-cancel"
         stop.textContent = "×"
         stop.title = "Cancel"
-        stop.addEventListener(
-            "click", create_proxy(lambda _e: filetransfer.cancel(transfer_id))
-        )
+        # A browser transfer is cancelled in the page; a copy running on the
+        # server is cancelled there, by whoever started the row.
+        cancel = on_cancel or (lambda: filetransfer.cancel(transfer_id))
+        stop.addEventListener("click", create_proxy(lambda _e: cancel()))
         row.appendChild(stop)
 
         rows.appendChild(row)
@@ -2210,6 +2354,15 @@ class IguanaXterm(MainWindow):
         self._toast_timer = js.window.setTimeout(
             create_proxy(lambda: holder.removeAttribute("data-visible")), 4000
         )
+
+
+_SAVED_CSS = """
+.ix-saved{display:flex;flex-direction:column;height:100%;min-height:0;gap:8px;}
+.ix-saved-bar{display:flex;align-items:center;gap:6px;flex:0 0 auto;}
+.ix-saved-path{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;color:#94a3b8;font:12px ui-monospace,Menlo,Consolas,monospace;}
+.ix-saved-table{flex:1 1 auto;min-height:0;}
+"""
 
 
 _WORKSPACE_CSS = """

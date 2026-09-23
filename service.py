@@ -58,6 +58,7 @@ from services.login_page import LoginPageMiddleware, check_at_startup  # noqa: E
 from services.pool import sftp_pool, transfer_pool  # noqa: E402
 from services.terminal_ws import router as terminal_router  # noqa: E402
 from services.transfer import router as transfer_router  # noqa: E402
+from services.downloads import router as downloads_router  # noqa: E402
 
 APPLICATION = "iguanaxterm"
 PORT = int(os.getenv("PORT", "8765"))
@@ -232,6 +233,7 @@ def build_app():
 
     application.include_router(terminal_router)
     application.include_router(transfer_router)
+    application.include_router(downloads_router)
 
     # xterm is served from this origin because pytincture's CSP is
     # `script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:` and

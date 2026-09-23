@@ -74,6 +74,25 @@ with `.focus()` rather than a click. And a maximized tile covers its
 neighbours, so the other tile's button is unreachable until you restore —
 the test takes the path a person would.
 
+## Server save smoke
+
+`server_save_smoke.py` removes the File System Access pickers from Chromium,
+which is exactly what the app checks for, so it takes the path Firefox takes.
+Playwright's Firefox is not installed here. It makes `~/savetest` on the SSH
+target (three small files and a 20 MB one), selects it together with a loose
+file, and downloads. The loose file must reach the browser, and the folder must
+appear on disk under `GANXTERM_DOWNLOAD_DIR/admin/`, byte for byte. Then it
+drives **Saved files**: open a folder, fetch a file back, refuse a `..` path,
+and delete.
+
+The app must be started with `GANXTERM_DOWNLOAD_DIR` set, and the script must
+see the same value, because it reads the folder directly:
+
+```bash
+GANXTERM_DOWNLOAD_DIR=/tmp/ixdl GANXTERM_DATA_DIR=/tmp/ixsmoke ... uv run python service.py &
+GANXTERM_DOWNLOAD_DIR=/tmp/ixdl python3 tests/smoke/server_save_smoke.py
+```
+
 ## Windows names smoke
 
 `windows_names_smoke.py` makes the page believe it is on Windows by overriding

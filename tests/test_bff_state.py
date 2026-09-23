@@ -5,7 +5,8 @@ pytincture loads a BFF module's source afresh for each call
 (``backend/app.py``: ``prepare_call`` -> ``_load_source_module``). A pool or
 registry defined at module level in such a file is therefore a new, empty one
 per request. That silently turned the SFTP pool into "dial on every click"
-(and never close).
+(and never close), and made every server-side download "No such download" on
+its first status poll.
 
 These tests load the modules the way pytincture does, twice, and check that
 what must persist is the same object both times.
@@ -36,6 +37,20 @@ def test_the_sftp_pool_is_the_same_pool_on_every_call():
 
     from services.pool import sftp_pool
     assert first.sftp_pool is sftp_pool, "and it is the one session_service closes"
+
+
+def test_a_download_job_is_visible_to_the_next_call(tmp_path, monkeypatch):
+    monkeypatch.setenv("GANXTERM_DOWNLOAD_DIR", str(tmp_path))
+    from services import download_jobs
+
+    job = download_jobs._Job(1, 1, "/x", tmp_path / "x", tmp_path)
+    with download_jobs._jobs_lock:
+        download_jobs._jobs[job.id] = job
+
+    for _ in range(2):
+        module = _load_like_pytincture("services/downloads.py", "DownloadService")
+        status = module.DownloadService({"user_id": 1, "username": "alice"}).status(job.id)
+        assert status["ok"], "the registry was rebuilt by the reload"
 
 
 def test_no_bff_module_keeps_mutable_state_at_module_level():

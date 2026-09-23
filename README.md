@@ -79,6 +79,11 @@ connect or fail, so it never makes the burst that restoring avoids.
   case-insensitive disk `report.txt` would silently overwrite `Report.txt`.
   Those are cleaned (`a_b.txt`, `CON_.log`) or numbered (`report (2).txt`)
   instead, and the summary says how many changed. Linux keeps every name as-is
+- **Folder downloads in any browser** — where the browser cannot pick a
+  destination (Firefox, or any non-https origin), a folder is saved on the
+  server instead, in `~/Downloads/IguanaXterm/<you>/` with the local container.
+  **Saved files** in the toolbar browses it, fetches files back and deletes.
+  The copy runs on the server, so closing the tab does not stop it
 - **Upload files or whole folders** — pick individual files, or a directory
   whose structure is recreated on the far side. Drag and drop works too.
 - **A transfer queue** with per-file progress, and cancel
@@ -293,9 +298,16 @@ unrecoverable.
 | `GANXTERM_CANONICAL_ORIGIN` | `http://127.0.0.1:$PORT` | Public origin. An `https://` value switches on production mode |
 | `GANXTERM_ALLOWED_HOSTS` | `127.0.0.1` | Comma-separated hostnames (no ports); the canonical origin's host is always added |
 | `GANXTERM_MAX_UPLOAD_BYTES` | `68719476736` (64 GiB) | Largest single upload. Every other request stays capped at 2 MiB |
+| `GANXTERM_DOWNLOAD_DIR` | `$GANXTERM_DATA_DIR/downloads` (`/downloads` in the container) | Where folder downloads are saved on the server, one subfolder per user |
+| `GANXTERM_DOWNLOAD_HOST_DIR` | `~/Downloads/IguanaXterm` | Host folder mounted at `/downloads` by `podman-run.sh` / compose |
 | `PORT` | `8765` | Listen port |
 
 ## Data persistence
+
+Folder downloads saved on the server (see *Folder downloads in any browser*)
+land in `GANXTERM_DOWNLOAD_HOST_DIR`, default `~/Downloads/IguanaXterm`, with
+one folder per user. The container runs with `--userns=keep-id`, so those files
+are owned by you, not by a container uid.
 
 One volume, `ganxterm_data`, mounted at `/data`:
 
@@ -348,6 +360,7 @@ resize path and the SFTP pool — everything else is unit-level. See
 | `narrow_pane_smoke.py` | the SFTP panel from 1200px down to 320px |
 | `tiled_smoke.py` | the grid, and switching layout modes |
 | `layout_smoke.py` | persistence, and that a restore dials nothing |
+| `server_save_smoke.py` | folder downloads saved on the server when there is no picker |
 | `windows_names_smoke.py` | Windows-safe folder download names, and Linux left alone |
 | `reconnect_all_smoke.py` | Reconnect all: the count, and that dials are sequential |
 | `ftp_smoke.py` | files-only FTP panes over TLS, against `ftp_target.py` |

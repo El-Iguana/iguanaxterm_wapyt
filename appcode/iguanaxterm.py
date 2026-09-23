@@ -1062,7 +1062,10 @@ class IguanaXterm(MainWindow):
             ModalConfig(
                 title="Edit session" if session_id else "New session",
                 width=560,
-                height=640,
+                # What the nine fields plus the action row actually measure.
+                # At 640 the Save button sat below the fold; short screens
+                # still clamp to max-height and scroll.
+                height=740,
             )
         )
 

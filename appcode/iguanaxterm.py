@@ -61,6 +61,10 @@ from services.user_service import UserService
 # base. Without this declaration the app starts with HTTP 422.
 APP_ENTRYPOINT = "IguanaXterm"
 
+# Browser tab icon. pytincture reads this literal from the app module and
+# resolves it against modules_path; .webp is among the types it serves.
+APP_FAVICON = "static/el_iguana_avatar.webp"
+
 UNSORTED = "Ungrouped"
 
 TERMINAL_THEME = TerminalTheme(
@@ -112,6 +116,9 @@ class IguanaXterm(MainWindow):
 
     def load_ui(self) -> None:
         self.set_theme("dark")
+        # pytincture's bootstrap page leaves the tab title empty once the app
+        # takes over, so the window identifies itself here.
+        js.document.title = "IguanaXterm"
 
         self._sessions: list[dict] = []
         self._selected_id: int | None = None

@@ -90,6 +90,19 @@ Repeat this whenever the widgetset changes.
 
 ### 3a. Podman
 
+One command rebuilds the widgetset wheel, rebuilds the image and restarts the
+container:
+
+```bash
+scripts/podman-run.sh            # add --logs to follow the output
+```
+
+It runs as `iguanaxterm` — container name, hostname and `app=IguanaXterm`
+label — on <http://127.0.0.1:8765/iguanaxterm>, with `restart: unless-stopped`
+so it survives a reboot.
+
+Or with compose:
+
 ```bash
 podman compose build
 podman compose up -d

@@ -1,23 +1,39 @@
+# Local testing with Podman:
+#   podman compose up -d          (needs: systemctl --user enable --now podman.socket)
+#
+# Without compose, which is what scripts/podman-run.sh does:
+#   podman build -t localhost/iguanaxterm:latest -f Containerfile .
+#   podman run -d --name iguanaxterm ...
+
 services:
 
   iguanaxterm:
     build:
       context: .
       dockerfile: Containerfile
+    image: localhost/iguanaxterm:latest
+    # The container identifies itself as IguanaXterm in `podman ps`, in its own
+    # shell prompt, and in the app's sidebar.
+    container_name: iguanaxterm
+    hostname: iguanaxterm
+    labels:
+      app: IguanaXterm
     restart: unless-stopped
     ports:
-      - "8765:8765"
+      # Loopback only. pytincture refuses authenticated plain HTTP anywhere
+      # else, so reaching this from another machine needs TLS and the two
+      # variables below.
+      - "127.0.0.1:8765:8765"
     env_file:
       - .env
     environment:
       - GANXTERM_DATA_DIR=/data
-      # pytincture will not serve authenticated plain HTTP off loopback. Set
-      # these to the public https origin and put TLS in front before exposing
-      # this beyond the host.
       - GANXTERM_CANONICAL_ORIGIN=${GANXTERM_CANONICAL_ORIGIN:-http://127.0.0.1:8765}
       - GANXTERM_ALLOWED_HOSTS=${GANXTERM_ALLOWED_HOSTS:-}
     volumes:
       - ganxterm_data:/data
 
 volumes:
+  # Not iguanaxterm_data: that name is taken by a root-owned volume left over
+  # from the abandoned dhxpyt attempt, and this image runs as uid 10001.
   ganxterm_data:

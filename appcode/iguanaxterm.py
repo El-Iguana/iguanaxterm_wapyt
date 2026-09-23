@@ -134,8 +134,11 @@ class IguanaXterm(MainWindow):
 
         self._sessions: list[dict] = []
         self._selected_id: int | None = None
-        self._terminals: dict[str, dict] = {}   # tab id -> {terminal, session_id}
-        self._sftp_tabs: dict[str, dict] = {}   # tab id -> {table, session_id, path}
+        # A pane is one connection: its own terminal and its own file browser,
+        # behind a two-entry tab strip. The workspace host (tabs today, a grid
+        # later) only decides where a pane's root element lives.
+        self._panes: dict[str, dict] = {}       # pane id -> pane state
+        self._sftp_tabs: dict[str, dict] = {}   # pane id -> {table, session_id, path}
         self._tab_counter = 0
         self._me: dict = {}
 
@@ -214,9 +217,10 @@ class IguanaXterm(MainWindow):
         self.tabs.on_close(self._on_tab_close)
 
         # The hint lives on the empty panel area rather than in a placeholder
-        # tab, so it comes back on its own when the last tab is closed.
+        # tab, so it comes back on its own when the last tab is closed. The pane
+        # and SFTP rules go up once here rather than with every pane built.
         hint = js.document.createElement("style")
-        hint.textContent = _WORKSPACE_CSS
+        hint.textContent = _WORKSPACE_CSS + _PANE_CSS + _SFTP_CSS
         js.document.head.appendChild(hint)
 
     def _toolbar_html(self) -> str:
@@ -254,6 +258,11 @@ class IguanaXterm(MainWindow):
             sftp_button = event.target.closest("[data-sftp]")
             if sftp_button:
                 self._sftp_click(sftp_button.dataset.sftp, sftp_button.dataset.tab)
+                return
+
+            pane_tab = event.target.closest("[data-pane-tab]")
+            if pane_tab:
+                self._pane_select(pane_tab.dataset.pane, pane_tab.dataset.paneTab)
 
         self._toolbar_proxy = create_proxy(_on_click)
         js.document.addEventListener("click", self._toolbar_proxy)
@@ -378,9 +387,9 @@ class IguanaXterm(MainWindow):
         X-CSRF-Token, which only fetch can set. The cookie is deliberately not
         HttpOnly so the page can read it back.
         """
-        open_terminals = len(self._terminals)
-        if open_terminals and not js.confirm(
-            f"Sign out and close {open_terminals} open terminal(s)?"
+        open_panes = len(self._panes)
+        if open_panes and not js.confirm(
+            f"Sign out and close {open_panes} open connection(s)?"
         ):
             return
 
@@ -404,23 +413,41 @@ class IguanaXterm(MainWindow):
         js.window.location.assign(f"/{application}/login")
 
     def _connect(self, node_id: str | None) -> None:
+        """
+        Open a pane for a session.
+
+        A pane is one connection, not one saved session: connecting to the same
+        host twice gives two panes with two shells, the way two terminal windows
+        would.
+        """
         if not node_id or not str(node_id).startswith("sess_"):
             return
-        session_id = int(str(node_id)[5:])
+        self._open_pane(int(str(node_id)[5:]))
+
+    def _open_pane(self, session_id: int, focus: str = "terminal") -> str | None:
         session = self._session(session_id)
         if session is None:
-            return
+            return None
+
+        is_telnet = session.get("type") == "telnet"
+        if focus == "files" and is_telnet:
+            self._toast("SFTP needs an SSH session.")
+            focus = "terminal"
 
         self._tab_counter += 1
-        tab_id = f"term_{self._tab_counter}"
+        pane_id = f"pane_{self._tab_counter}"
         self.tabs.add_tab(
             TabConfig(
-                id=tab_id,
+                id=pane_id,
                 title=session["name"],
                 icon=session_icon(session.get("type", "ssh")),
                 closable=True,
             )
         )
+
+        cell = self.tabs.get_cell(pane_id)
+        container = cell.getContainer() if hasattr(cell, "getContainer") else cell
+        container.innerHTML = self._pane_html(pane_id, session, is_telnet)
 
         terminal = Terminal(
             TerminalConfig(
@@ -429,78 +456,113 @@ class IguanaXterm(MainWindow):
                 search=True,
                 reconnect=True,
             ),
-            container=self.tabs.get_cell(tab_id),
+            container=js.document.getElementById(f"pane-term-{pane_id}"),
         )
         terminal.on_error(lambda payload: self._toast(payload.get("message", "Error")))
 
-        self._terminals[tab_id] = {"terminal": terminal, "session_id": session_id}
-        self.tabs.set_active(tab_id)
+        self._panes[pane_id] = {
+            "session_id": session_id,
+            "name": session["name"],
+            "terminal": terminal,
+            "telnet": is_telnet,
+            "tab": "terminal",
+            "files_mounted": False,
+        }
 
-    def _on_tab_change(self, payload: dict) -> None:
-        tab_id = payload.get("id") if isinstance(payload, dict) else payload
-        entry = self._terminals.get(tab_id)
-        if entry is None:
+        self.tabs.set_active(pane_id)
+        if focus == "files":
+            self._pane_select(pane_id, "files")
+        return pane_id
+
+    def _pane_html(self, pane_id: str, session: dict, is_telnet: bool) -> str:
+        """
+        A pane's own chrome: a two-entry tab strip over two stacked panels.
+
+        The panels are absolutely positioned siblings rather than one swapped
+        element, so the terminal's host is created once and never replaced —
+        remounting an xterm is what loses a buffer. A hidden panel has no size,
+        so ``fit()`` skips it and the widget's ResizeObserver re-fits it on the
+        way back in.
+        """
+        host = session.get("host", "")
+        port = session.get("port")
+        user = session.get("username") or ""
+        label = f"{user}@{host}" if user else host
+        if port and int(port) not in (22, 23):
+            label = f"{label}:{port}"
+
+        files_attrs = ' disabled title="SFTP needs an SSH session."' if is_telnet else ""
+        return (
+            f'<div class="ix-pane" data-pane="{pane_id}">'
+            f'  <div class="ix-pane-tabs">'
+            f'    <button type="button" class="ix-pane-tab" data-pane-tab="terminal"'
+            f'            data-pane="{pane_id}" aria-selected="true">'
+            f'      <span class="mdi mdi-console-line"></span><span>Terminal</span></button>'
+            f'    <button type="button" class="ix-pane-tab" data-pane-tab="files"'
+            f'            data-pane="{pane_id}" aria-selected="false"{files_attrs}>'
+            f'      <span class="mdi mdi-folder-network"></span><span>Files</span></button>'
+            f'    <span class="ix-pane-spacer"></span>'
+            f'    <span class="ix-pane-host" title="{label}">{label}</span>'
+            f'  </div>'
+            f'  <div class="ix-pane-body">'
+            f'    <div class="ix-pane-panel" data-panel="terminal" id="pane-term-{pane_id}"></div>'
+            f'    <div class="ix-pane-panel" data-panel="files" id="pane-files-{pane_id}" hidden></div>'
+            f'  </div>'
+            f"</div>"
+        )
+
+    def _pane_select(self, pane_id: str, which: str) -> None:
+        pane = self._panes.get(pane_id)
+        if pane is None or which not in ("terminal", "files"):
             return
-        # A keep-alive tab is hidden, not unmounted, so its terminal has no
-        # dimensions while inactive and skips fitting. Re-fit on the way back in
-        # or the grid stays at whatever size it last measured.
-        entry["terminal"].fit()
-        entry["terminal"].focus()
-
-    def _on_tab_close(self, payload: dict) -> None:
-        tab_id = payload.get("id") if isinstance(payload, dict) else payload
-
-        entry = self._terminals.pop(tab_id, None)
-        if entry is not None:
-            # Closing the tab must close the socket. The dhxpyt rewrite left
-            # every terminal it ever opened running on the server.
-            entry["terminal"].destroy()
-
-        sftp = self._sftp_tabs.pop(tab_id, None)
-        if sftp is not None:
-            sftp["table"].destroy()
-            _spawn(
-                SFTPService().disconnect_async(sftp["session_id"]),
-                "sftp disconnect",
-            )
-
-    # ------------------------------------------------------------------
-    # SFTP
-    # ------------------------------------------------------------------
-
-    def _open_sftp(self, session_id: int) -> None:
-        session = self._session(session_id)
-        if session is None:
-            return
-        if session.get("type") == "telnet":
+        if which == "files" and pane["telnet"]:
             self._toast("SFTP needs an SSH session.")
             return
 
-        existing = next(
-            (
-                tab_id
-                for tab_id, entry in self._sftp_tabs.items()
-                if entry["session_id"] == session_id
-            ),
-            None,
-        )
-        if existing:
-            self.tabs.set_active(existing)
-            return
-
-        self._tab_counter += 1
-        tab_id = f"sftp_{self._tab_counter}"
-        self.tabs.add_tab(
-            TabConfig(
-                id=tab_id,
-                title=f"{session['name']} files",
-                icon="mdi-folder-network",
-                closable=True,
+        pane["tab"] = which
+        for name, element_id in (
+            ("terminal", f"pane-term-{pane_id}"),
+            ("files", f"pane-files-{pane_id}"),
+        ):
+            button = js.document.querySelector(
+                f'.ix-pane-tab[data-pane="{pane_id}"][data-pane-tab="{name}"]'
             )
-        )
+            if button:
+                button.setAttribute("aria-selected", "true" if name == which else "false")
+            panel = js.document.getElementById(element_id)
+            if panel:
+                panel.hidden = name != which
 
-        cell = self.tabs.get_cell(tab_id)
-        panel = self._build_sftp_panel(cell, tab_id)
+        if which == "terminal":
+            pane["terminal"].fit()
+            pane["terminal"].focus()
+        elif not pane["files_mounted"]:
+            # Mounted on first use, so a pane that is only ever a terminal never
+            # dials SFTP at all.
+            pane["files_mounted"] = True
+            _spawn(self._mount_files(pane_id), "sftp mount")
+
+    async def _mount_files(self, pane_id: str) -> None:
+        pane = self._panes.get(pane_id)
+        if pane is None:
+            return
+        session_id = pane["session_id"]
+
+        # Registering the hold before the first listing means two panes on one
+        # host both count, and closing either leaves the other's channel up.
+        result = await SFTPService().retain_async(session_id)
+        if not result.get("ok"):
+            self._toast(result.get("error", "Could not open SFTP"))
+            # Leave the pane on its terminal rather than on an empty panel, and
+            # let a later click try again.
+            pane["files_mounted"] = False
+            self._pane_select(pane_id, "terminal")
+            return
+        pane["sftp_held"] = True
+
+        panel = self._build_sftp_panel(
+            js.document.getElementById(f"pane-files-{pane_id}"), pane_id
+        )
         table = DataTable(
             DataTableConfig(
                 columns=[
@@ -528,19 +590,81 @@ class IguanaXterm(MainWindow):
             container=panel["table_cell"],
         )
 
-        entry = {"table": table, "session_id": session_id, "path": ""}
-        self._sftp_tabs[tab_id] = entry
+        self._sftp_tabs[pane_id] = {"table": table, "session_id": session_id, "path": ""}
+        table.on_activate(lambda payload: self._sftp_activate(pane_id, payload))
+        table.on_action(lambda payload: self._sftp_action(pane_id, payload))
+        table.on_drop(lambda payload: self._sftp_upload(pane_id, payload))
 
-        table.on_activate(lambda payload: self._sftp_activate(tab_id, payload))
-        table.on_action(lambda payload: self._sftp_action(tab_id, payload))
-        table.on_drop(lambda payload: self._sftp_upload(tab_id, payload))
+        await self._sftp_navigate(pane_id, "")
 
-        self.tabs.set_active(tab_id)
-        _spawn(self._sftp_navigate(tab_id, ""), "sftp listing")
+    def _on_tab_change(self, payload: dict) -> None:
+        pane_id = payload.get("id") if isinstance(payload, dict) else payload
+        pane = self._panes.get(pane_id)
+        if pane is None or pane["tab"] != "terminal":
+            return
+        # A background pane is hidden, not unmounted, so its terminal has no
+        # dimensions while inactive and skips fitting. Re-fit on the way back in
+        # or the grid stays at whatever size it last measured.
+        pane["terminal"].fit()
+        pane["terminal"].focus()
+
+    def _on_tab_close(self, payload: dict) -> None:
+        pane_id = payload.get("id") if isinstance(payload, dict) else payload
+        pane = self._panes.pop(pane_id, None)
+        if pane is None:
+            return
+
+        # Closing the pane must close the socket. The dhxpyt rewrite left every
+        # terminal it ever opened running on the server.
+        pane["terminal"].destroy()
+
+        sftp = self._sftp_tabs.pop(pane_id, None)
+        if sftp is not None:
+            sftp["table"].destroy()
+        if pane.get("sftp_held"):
+            # Drops this pane's hold only. Another pane on the same host keeps
+            # the channel alive.
+            _spawn(
+                SFTPService().disconnect_async(pane["session_id"]),
+                "sftp release",
+            )
+
+    # ------------------------------------------------------------------
+    # SFTP
+    # ------------------------------------------------------------------
+
+    def _open_sftp(self, session_id: int) -> None:
+        """
+        Show a session's files.
+
+        Reuses an open pane for that session rather than dialling a second
+        connection just to browse; only when nothing is open does it start one.
+        """
+        session = self._session(session_id)
+        if session is None:
+            return
+        if session.get("type") == "telnet":
+            self._toast("SFTP needs an SSH session.")
+            return
+
+        existing = next(
+            (
+                pane_id
+                for pane_id, pane in self._panes.items()
+                if pane["session_id"] == session_id
+            ),
+            None,
+        )
+        if existing:
+            self.tabs.set_active(existing)
+            self._pane_select(existing, "files")
+            return
+
+        self._open_pane(session_id, focus="files")
 
     def _build_sftp_panel(self, cell, tab_id: str) -> dict:
         """
-        Build the SFTP panel chrome inside a tab cell.
+        Build the SFTP panel chrome inside a pane's Files panel.
 
         The breadcrumb bar is plain HTML because wapyt has no breadcrumb widget
         and one path strip does not justify inventing one.
@@ -577,7 +701,7 @@ class IguanaXterm(MainWindow):
             f'    </div>'
             f'    <div class="ix-queue-rows" id="queue-rows-{tab_id}"></div>'
             f'  </div>'
-            f"</div><style>{_SFTP_CSS}</style>"
+            f"</div>"
         )
         return {
             "crumbs": js.document.getElementById(f"crumbs-{tab_id}"),
@@ -1413,6 +1537,35 @@ _SIDEBAR_CSS = """
 .ix-brand-sub{font:10.5px system-ui,sans-serif;color:#64748b;letter-spacing:.03em;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .ix-sidebar-tree{flex:1 1 auto;min-height:0;}
+"""
+
+_PANE_CSS = """
+.ix-pane{display:flex;flex-direction:column;height:100%;min-height:0;
+  container-type:inline-size;}
+.ix-pane-tabs{display:flex;align-items:center;gap:2px;flex:0 0 auto;
+  padding:4px 6px;background:#0b1220;border-bottom:1px solid #1f2937;}
+.ix-pane-tab{display:inline-flex;align-items:center;gap:6px;padding:4px 11px;
+  color:#94a3b8;background:transparent;border:1px solid transparent;
+  border-radius:6px;cursor:pointer;font:12px system-ui,sans-serif;}
+.ix-pane-tab:hover:not(:disabled){background:#1f2937;color:#cbd5f5;}
+.ix-pane-tab[aria-selected="true"]{background:#1e293b;color:#e2e8f0;
+  border-color:#334155;}
+.ix-pane-tab:disabled{opacity:.4;cursor:not-allowed;}
+.ix-pane-tab .mdi{font-size:15px;}
+.ix-pane-spacer{flex:1 1 auto;}
+.ix-pane-host{color:#64748b;font:11px ui-monospace,Menlo,Consolas,monospace;
+  padding-right:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  max-width:40%;}
+/* Both panels are always mounted and stacked; only visibility changes, so the
+   terminal's host element is created once and never replaced. */
+.ix-pane-body{position:relative;flex:1 1 auto;min-height:0;}
+.ix-pane-panel{position:absolute;inset:0;min-width:0;min-height:0;}
+.ix-pane-panel[hidden]{display:none;}
+/* A narrow pane drops the tab labels to icons. */
+@container (max-width: 420px){
+  .ix-pane-tab span:not(.mdi){display:none;}
+  .ix-pane-host{display:none;}
+}
 """
 
 _SFTP_CSS = """

@@ -37,6 +37,26 @@ ordering, streaming, progress, the queue, the routes — and the stub returns a
 real `WritableStream`, since `response.body.pipeTo()` rejects anything else and
 the genuine `FileSystemWritableFileStream` is one.
 
+## Pane smoke
+
+`pane_smoke.py` covers the pane model: a connection carries its own
+Terminal/Files tab strip, the file browser is built only when first asked for,
+connecting twice gives two independent shells, and closing one pane leaves its
+neighbour working.
+
+It seeds its own `alpine-box` session, so it needs only the SSH target and the
+service:
+
+```bash
+python3 tests/smoke/pane_smoke.py
+```
+
+Note what it does **not** prove: the SFTP pool's refcounting. The pool re-dials
+transparently, so a listing after a stray `close()` looks identical to one
+after a correct `release()`. The refcount is pinned by the unit tests in
+`tests/test_sftp_pool.py` instead, and the damage it prevents is an in-flight
+transfer dying, not a later listing.
+
 ## Reparent spike
 
 `reparent_spike.py` answers one architectural question for the planned

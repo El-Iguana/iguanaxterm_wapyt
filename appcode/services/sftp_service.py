@@ -51,6 +51,10 @@ class SFTPPool:
     def __init__(self) -> None:
         self._connections: dict[tuple[int, int], _PooledConnection] = {}
         self._keys: dict[int, tuple[int, int]] = {}
+        # How many open panes still want each connection. A session can be open
+        # in several panes at once, and the first one closed must not pull the
+        # channel out from under the others.
+        self._refs: dict[tuple[int, int], int] = {}
         self._guard = threading.Lock()
         # One lock per session, held across the connect itself. Without it two
         # concurrent acquires for the same session both miss the cache and both
@@ -70,6 +74,10 @@ class SFTPPool:
             conn = self._connections.pop(key, None)
             self._keys.pop(key[1], None)
             self._dialing.pop(key, None)
+            # A browser that was closed or crashed never released its hold, so
+            # idle eviction is what stops a stale refcount pinning a channel
+            # open for the life of the process.
+            self._refs.pop(key, None)
             if conn is not None:
                 try:
                     conn.client.close()
@@ -118,9 +126,50 @@ class SFTPPool:
                 self._keys[session_id] = key
             return conn
 
+    def retain(self, user_id: int, session_id: int) -> int:
+        """Register interest in a session's channel. Balanced by release()."""
+        key = (int(user_id), int(session_id))
+        with self._guard:
+            self._refs[key] = self._refs.get(key, 0) + 1
+            return self._refs[key]
+
+    def release(self, user_id: int, session_id: int) -> int:
+        """
+        Drop one hold, closing the channel only when the last one goes.
+
+        This is what ``disconnect`` means now. Closing outright was correct
+        while one session could only be open once; with a pane per connection,
+        the same session can be open several times over and the first pane
+        closed would have killed the rest.
+        """
+        key = (int(user_id), int(session_id))
+        with self._guard:
+            remaining = self._refs.get(key, 0) - 1
+            if remaining > 0:
+                self._refs[key] = remaining
+                return remaining
+            self._refs.pop(key, None)
+            conn = self._connections.pop(key, None)
+            self._keys.pop(key[1], None)
+            self._dialing.pop(key, None)
+        if conn is not None:
+            try:
+                conn.client.close()
+            except Exception:
+                pass
+        return 0
+
     def close(self, session_id: int) -> None:
+        """
+        Force the channel shut whatever is holding it.
+
+        Deleting a session or a user must not leave a live channel to it, so
+        this ignores refcounts rather than waiting them out.
+        """
         with self._guard:
             key = self._keys.pop(int(session_id), None)
+            if key:
+                self._refs.pop(key, None)
             conn = self._connections.pop(key, None) if key else None
         if conn is not None:
             try:
@@ -133,6 +182,7 @@ class SFTPPool:
             connections = list(self._connections.values())
             self._connections.clear()
             self._keys.clear()
+            self._refs.clear()
         for conn in connections:
             try:
                 conn.client.close()
@@ -331,10 +381,22 @@ class SFTPService:
 
         yield {"done": True, "files": total_files, "bytes": total_bytes}
 
+    def retain(self, session_id: int) -> dict:
+        """
+        Register a pane's interest in a session's SFTP channel.
+
+        Called when a pane first opens its Files tab, and balanced by
+        ``disconnect`` when that pane closes.
+        """
+        if self._session(session_id) is None:
+            return {"ok": False, "error": "Session not found"}
+        holds = sftp_pool.retain(self._user_id, int(session_id))
+        return {"ok": True, "holds": holds}
+
     def disconnect(self, session_id: int) -> dict:
-        """Drop the pooled connection for a session."""
-        sftp_pool.close(int(session_id))
-        return {"ok": True}
+        """Drop this pane's hold; the channel closes when the last one goes."""
+        holds = sftp_pool.release(self._user_id, int(session_id))
+        return {"ok": True, "holds": holds}
 
     # ------------------------------------------------------------------
 

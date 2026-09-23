@@ -213,6 +213,25 @@ decided 2026-09-23; not built yet.
   a Reconnect button. Auto-dialling N sessions on page load walks straight into
   the `MaxStartups` banner resets that `ssh.py`'s retry exists to survive.
 
+### Phase 1 is built (2026-09-23)
+
+The Pane abstraction and the pool refcounting are in, hosted by the existing
+TabWidget. GridStack is not started. What changed:
+
+- `_connect` opens a **pane**, not a terminal tab. `_open_pane` builds the
+  pane chrome, mounts the Terminal into `#pane-term-<id>` and leaves
+  `#pane-files-<id>` empty.
+- The Files panel is built on first click (`_mount_files`), so a pane that is
+  only ever a terminal never dials SFTP.
+- `_open_sftp` no longer makes a top-level tab. It reuses an open pane for that
+  session, or starts one, and selects its Files tab.
+- Both panels are absolutely positioned siblings, toggled with `hidden`. The
+  terminal's host element is created once and never replaced.
+- `_terminals` is gone; `_panes` replaces it. `_sftp_tabs` is now keyed by pane
+  id, which is why every `_sftp_*` method still reads unchanged.
+- `_SFTP_CSS` moved out of the per-pane markup into the one-time head
+  injection — it used to be re-injected with every tab.
+
 ### The abstraction
 
 Two workspace modes stay affordable only if the content is mode-agnostic:
@@ -244,11 +263,17 @@ tab inside the connection's own pane.
   Still move the **pane root**, never the terminal's own host element: the
   widget's observer is bound to that element and the spike only exercised
   moving an ancestor.
-- **The SFTP pool breaks as soon as two cells share a host.** It is keyed
-  `(user_id, session_id)` (`sftp_service.py:99`) and tab close calls
-  `disconnect_async`, which closes it outright, so closing one cell kills the
-  other's file browser. Needs retain/release refcounting, torn down at zero by
-  the existing idle eviction. This lands with the Pane work, not with the grid.
+- **The SFTP pool is refcounted now — and the browser cannot see it.** The pool
+  is keyed `(user_id, session_id)`, and `disconnect` used to close the channel
+  outright, so with a pane per connection the first pane closed pulled the
+  channel out from under the rest. `retain`/`release` fixed that.
+
+  What matters for testing: a browser test **cannot** catch a regression here.
+  `acquire()` re-dials transparently, so a listing after a wrong `close()` is
+  indistinguishable from one after a correct `release()`. The real damage is an
+  in-flight transfer dying. `tests/test_sftp_pool.py` pins it at the unit level;
+  a mutation of `release()` back to the old semantics fails those tests, which
+  is how we know they bite.
 - **The SFTP toolbar does not fit a cell.** Five labelled buttons measure
   ~520px against a ~460px three-across cell. Use a container query
   (`container-type: inline-size` on the pane) to drop labels to icons — no JS,

@@ -138,6 +138,8 @@ class IguanaXterm(MainWindow):
         # behind a two-entry tab strip. The workspace host (tabs today, a grid
         # later) only decides where a pane's root element lives.
         self._panes: dict[str, dict] = {}       # pane id -> pane state
+        # JS ResizeObserver per pane, disconnected when the pane closes.
+        self._crumb_observers: dict = {}
         self._sftp_tabs: dict[str, dict] = {}   # pane id -> {table, session_id, path}
         self._tab_counter = 0
         self._me: dict = {}
@@ -621,6 +623,9 @@ class IguanaXterm(MainWindow):
         sftp = self._sftp_tabs.pop(pane_id, None)
         if sftp is not None:
             sftp["table"].destroy()
+        observer = self._crumb_observers.pop(pane_id, None)
+        if observer is not None:
+            observer.disconnect()
         if pane.get("sftp_held"):
             # Drops this pane's hold only. Another pane on the same host keeps
             # the channel alive.
@@ -681,15 +686,20 @@ class IguanaXterm(MainWindow):
             f'            title="Upload an entire folder and everything inside it, '
             f'keeping its structure.">'
             f'      <span class="mdi mdi-folder-upload"></span><span>Upload folder…</span></button>'
-            f'    <button type="button" class="ix-sftp-btn" data-sftp="download" data-tab="{tab_id}">'
+            f'    <button type="button" class="ix-sftp-btn" data-sftp="download" data-tab="{tab_id}"'
+            f'            title="Download the selected files or folders.">'
             f'      <span class="mdi mdi-download"></span><span>Download</span></button>'
             f'    <span class="ix-sftp-sep"></span>'
-            f'    <button type="button" class="ix-sftp-btn" data-sftp="mkdir" data-tab="{tab_id}">'
+            f'    <button type="button" class="ix-sftp-btn" data-sftp="mkdir" data-tab="{tab_id}"'
+            f'            title="Create a folder here.">'
             f'      <span class="mdi mdi-folder-plus"></span><span>New folder</span></button>'
-            f'    <button type="button" class="ix-sftp-btn" data-sftp="refresh" data-tab="{tab_id}">'
+            f'    <button type="button" class="ix-sftp-btn" data-sftp="refresh" data-tab="{tab_id}"'
+            f'            title="Re-read this directory.">'
             f'      <span class="mdi mdi-refresh"></span><span>Refresh</span></button>'
             f'    <span class="ix-sftp-spacer"></span>'
-            f'    <span class="ix-sftp-note" id="note-{tab_id}"></span>'
+            f'    <span class="ix-sftp-note" id="note-{tab_id}">'
+            f'      <span class="mdi mdi-alert ix-sftp-note-icon"></span>'
+            f'      <span class="ix-sftp-note-text"></span></span>'
             f'  </div>'
             f'  <div class="ix-crumbs" id="crumbs-{tab_id}"></div>'
             f'  <div class="ix-sftp-table" id="table-{tab_id}"></div>'
@@ -703,8 +713,21 @@ class IguanaXterm(MainWindow):
             f'  </div>'
             f"</div>"
         )
+        crumbs = js.document.getElementById(f"crumbs-{tab_id}")
+
+        # Scrolling to the tail on navigation is not enough once panes can be
+        # resized: a narrower pane keeps the old scroll offset and leaves the
+        # middle of the path showing. Re-pin on resize, which is what a grid
+        # drag does continuously.
+        def _pin_crumbs(*_args) -> None:
+            crumbs.scrollLeft = crumbs.scrollWidth
+
+        observer = js.ResizeObserver.new(create_proxy(_pin_crumbs))
+        observer.observe(crumbs)
+        self._crumb_observers[tab_id] = observer
+
         return {
-            "crumbs": js.document.getElementById(f"crumbs-{tab_id}"),
+            "crumbs": crumbs,
             "table_cell": js.document.getElementById(f"table-{tab_id}"),
         }
 
@@ -730,20 +753,32 @@ class IguanaXterm(MainWindow):
         self._show_picker_note(tab_id)
 
     def _show_picker_note(self, tab_id: str) -> None:
-        """Say up front when downloads cannot choose a destination."""
+        """
+        Say up front when downloads cannot choose a destination.
+
+        The text lives in its own span so a narrow pane can drop it and leave
+        the warning icon, which carries the same words as a tooltip. Losing the
+        warning entirely would be worse than losing the space.
+        """
         note = js.document.getElementById(f"note-{tab_id}")
-        if not note or note.textContent:
+        if not note:  # JsNull, not None, when absent
+            return
+        text_el = note.querySelector(".ix-sftp-note-text")
+        if not text_el or text_el.textContent:
             return
         caps = filetransfer.capabilities()
         if caps.pickers:
             return
-        note.textContent = (
+        message = (
             "This browser cannot choose a download location — files go to your "
             "downloads folder. Chrome or Edge can."
             if caps.secure_context
             else "Destination picking needs HTTPS; downloads go to your "
                  "downloads folder."
         )
+        text_el.textContent = message
+        note.title = message
+        note.dataset.shown = "true"
 
     def _render_crumbs(self, tab_id: str, path: str) -> None:
         holder = js.document.getElementById(f"crumbs-{tab_id}")
@@ -781,6 +816,11 @@ class IguanaXterm(MainWindow):
                 ),
             )
             holder.appendChild(button)
+
+        # The strip scrolls rather than wrapping, so a deep path in a narrow
+        # pane costs one line instead of four. Scroll to the end: the directory
+        # you are actually in is the last crumb, and it is the one worth seeing.
+        holder.scrollLeft = holder.scrollWidth
 
     def _sftp_activate(self, tab_id: str, payload: dict) -> None:
         row = payload.get("row") or {}
@@ -1579,10 +1619,16 @@ _SFTP_CSS = """
 .ix-sftp-btn .mdi{font-size:15px;}
 .ix-sftp-sep{width:1px;height:18px;margin:0 5px;background:#334155;}
 .ix-sftp-spacer{flex:1 1 auto;}
-.ix-sftp-note{color:#fbbf24;font:11px system-ui,sans-serif;padding-right:6px;
-  max-width:46ch;text-align:right;line-height:1.3;}
-.ix-queue{flex:0 0 auto;max-height:210px;display:flex;flex-direction:column;
-  background:#0f172a;border-top:1px solid #1f2937;}
+.ix-sftp-note{display:none;align-items:center;gap:5px;color:#fbbf24;
+  font:11px system-ui,sans-serif;padding-right:6px;max-width:46ch;
+  text-align:right;line-height:1.3;}
+.ix-sftp-note[data-shown]{display:inline-flex;}
+.ix-sftp-note-icon{font-size:14px;flex:0 0 auto;}
+/* A short grid cell cannot spare 210px of queue. The percentage resolves
+   because .ix-sftp sits in an absolutely positioned pane panel, so its height
+   is definite. */
+.ix-queue{flex:0 0 auto;max-height:min(210px, 45%);display:flex;
+  flex-direction:column;background:#0f172a;border-top:1px solid #1f2937;}
 .ix-queue[hidden]{display:none;}
 .ix-queue-head{display:flex;align-items:center;justify-content:space-between;
   padding:5px 10px;border-bottom:1px solid #1f2937;}
@@ -1611,13 +1657,50 @@ _SFTP_CSS = """
 .ix-queue-row[data-state="failed"] .ix-queue-bar{background:#f87171;}
 .ix-queue-row[data-state="failed"] .ix-queue-status{color:#f87171;}
 .ix-queue-row[data-state="cancelled"]{opacity:.55;}
-.ix-crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:2px;padding:6px 8px;
-  background:#111827;border-bottom:1px solid #1f2937;}
+/* nowrap + scroll: wrapping turned a deep path into four stacked lines that
+   ate the listing in a narrow pane. */
+.ix-crumbs{display:flex;flex-wrap:nowrap;align-items:center;gap:2px;
+  padding:6px 8px;background:#111827;border-bottom:1px solid #1f2937;
+  overflow-x:auto;scrollbar-width:none;}
+.ix-crumbs::-webkit-scrollbar{height:0;}
+.ix-crumb{flex:0 0 auto;max-width:22ch;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;}
 .ix-crumb{padding:3px 8px;color:#cbd5f5;background:transparent;border:none;
   border-radius:4px;cursor:pointer;font:12px system-ui,sans-serif;}
 .ix-crumb:hover{background:#1f2937;}
 .ix-crumb-up{color:#38bdf8;}
 .ix-sftp-table{flex:1 1 auto;min-height:0;}
+
+/* Narrow panes. The natural toolbar is 469px wide, so it starts clipping just
+   under that; the tiers below give it somewhere to go. Container queries, not
+   media queries -- a pane is narrow because the grid cell is narrow, which has
+   nothing to do with the size of the window. */
+@container (max-width: 700px){
+  /* Keep the warning, drop its sentence; the icon carries it as a tooltip. */
+  .ix-sftp-note-text{display:none;}
+}
+/* Below ~500px the fixed columns (icon 34 + size 100 + modified 150 + perms
+   80, plus the checkbox) squeezed Name to zero and the filename -- the one
+   column that matters -- disappeared behind a horizontal scrollbar. Secondary
+   columns give way instead; they are still in the context menu and the
+   tooltip. */
+@container (max-width: 700px){
+  .ix-sftp-table th[data-column-id="permissions"],
+  .ix-sftp-table td[data-column-id="permissions"]{display:none;}
+}
+@container (max-width: 560px){
+  .ix-sftp-table th[data-column-id="modified"],
+  .ix-sftp-table td[data-column-id="modified"]{display:none;}
+  .ix-sftp-btn span:not(.mdi){display:none;}
+  .ix-sftp-btn{padding:5px 7px;}
+  .ix-sftp-bar{gap:2px;padding:6px;}
+  .ix-sftp-sep{margin:0 3px;}
+}
+@container (max-width: 420px){
+  .ix-crumb{max-width:12ch;}
+  .ix-queue-name{flex:0 1 120px;}
+  .ix-queue-status{min-width:64px;}
+}
 """
 
 _ADMIN_CSS = """

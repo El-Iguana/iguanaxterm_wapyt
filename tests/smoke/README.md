@@ -57,6 +57,21 @@ after a correct `release()`. The refcount is pinned by the unit tests in
 `tests/test_sftp_pool.py` instead, and the damage it prevents is an in-flight
 transfer dying, not a later listing.
 
+## Narrow pane smoke
+
+`narrow_pane_smoke.py` drives the SFTP panel at grid-cell widths from 1200px
+down to 320px: labels collapse to icons and back, every icon-only button keeps
+a tooltip and still works, a nine-crumb path stays on one line with the current
+directory in view across repeated resizes, and the capability note degrades to
+its icon without overflowing.
+
+```bash
+python3 tests/smoke/narrow_pane_smoke.py
+```
+
+It resizes the pane element directly rather than the viewport, because that is
+what a grid cell does and what the container queries actually respond to.
+
 ## Reparent spike
 
 `reparent_spike.py` answers one architectural question for the planned

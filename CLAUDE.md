@@ -274,11 +274,28 @@ tab inside the connection's own pane.
   in-flight transfer dying. `tests/test_sftp_pool.py` pins it at the unit level;
   a mutation of `release()` back to the old semantics fails those tests, which
   is how we know they bite.
-- **The SFTP toolbar does not fit a cell.** Five labelled buttons measure
-  ~520px against a ~460px three-across cell. Use a container query
-  (`container-type: inline-size` on the pane) to drop labels to icons — no JS,
-  no resize listeners. The breadcrumbs need middle-ellipsis and the transfer
-  queue's `max-height:210px` needs to be a fraction of cell height.
+- **Narrow panes are handled (Phase 2, 2026-09-23)** with container queries on
+  `.ix-pane`, not media queries: a pane is narrow because its cell is narrow,
+  which has nothing to do with the window. Measured, not guessed — the toolbar's
+  natural width is **469px**, so it starts clipping just under that:
+
+  | tier | what gives way |
+  |---|---|
+  | ≤700px | the capability note's sentence (icon keeps it as a tooltip); `permissions` column |
+  | ≤560px | toolbar labels → icons; `modified` column |
+  | ≤420px | crumb width, queue name and status widths |
+
+  The worst of it was not the toolbar. Below ~500px the fixed columns squeezed
+  **Name to 0px** — the filename vanished behind a horizontal scrollbar and a
+  directory could not be double-clicked at all. Fixed by dropping secondary
+  columns, which needed `data-column-id` on `td` in wapyt (headers had it,
+  cells did not).
+
+  Two things that are not CSS: every toolbar button needs a `title`, since
+  icon-only is unusable without one; and the breadcrumb strip needs a
+  `ResizeObserver` re-pinning `scrollLeft` to its tail. Scrolling to the end on
+  navigation alone is not enough — a resize keeps the old offset and leaves the
+  middle of the path showing, which a grid drag would do continuously.
 - **Resize storms need a widgetset change.** `terminal.js` already suppresses
   redundant PTY messages when cols/rows are unchanged, but its `ResizeObserver`
   fires per frame during a drag and an app cannot intercept it. wapyt needs a

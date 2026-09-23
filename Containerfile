@@ -4,8 +4,9 @@ WORKDIR /app
 
 # gcc + libffi cover the bcrypt/cryptography C extensions on architectures
 # without prebuilt wheels. A no-op cost on x86_64 and aarch64.
+# git is required by pip to install pytincture from its repository.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc libffi-dev \
+        gcc libffi-dev git \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

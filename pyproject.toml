@@ -35,7 +35,11 @@ norecursedirs = ["smoke"]
 dev = ["pytest>=8.0"]
 
 [tool.uv.sources]
-pytincture = { path = "../pytincture", editable = true }
+# From git, pinned to the tag this app was verified against, so a fresh
+# clone builds without a sibling checkout. To work on pytincture itself,
+# override locally:
+#   uv add --editable ../pytincture
+pytincture = { git = "https://github.com/pytincture/pytincture.git", tag = "v1.0.0rc8" }
 # Server-side only, for widgetset discovery: pytincture AST-walks the app's
 # imports and reads __widgetset__ from the installed distribution. The browser
 # installs the dev wheel from appcode/ instead of this checkout.

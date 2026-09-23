@@ -73,19 +73,46 @@ def canonical_origin() -> str:
     return os.getenv("GANXTERM_CANONICAL_ORIGIN", f"http://127.0.0.1:{PORT}").rstrip("/")
 
 
+def _strip_port(value: str) -> str:
+    """Drop a trailing :port, leaving IPv6 literals and bare names intact."""
+    # A bare "[::1]" splits to tail="1]", which is not all digits, so the
+    # bracketed form is safe without a special case.
+    head, _, tail = value.rpartition(":")
+    return head if head and tail.isdigit() else value
+
+
 def allowed_hosts() -> tuple[str, ...]:
     """
-    Exact Host values this service will answer to.
+    Exact Host values this service answers to.
 
     pytincture refuses to enable authentication without them — a wildcard Host
     is what makes DNS-rebinding attacks work. Behind a reverse proxy, set
-    GANXTERM_ALLOWED_HOSTS to the public name; the default covers local use.
+    GANXTERM_ALLOWED_HOSTS to the public name.
+
+    **Hostnames only, no ports.** Starlette's TrustedHostMiddleware compares
+    against the Host header with the port stripped, and pytincture matches
+    canonical_origin's bare hostname, so a "host:port" entry never matches
+    anything. The canonical origin's hostname is always included, because
+    pytincture rejects a configuration where it is missing — and the container
+    case makes that easy to get wrong, since the published port differs from
+    the one the app listens on inside.
     """
     configured = os.getenv("GANXTERM_ALLOWED_HOSTS", "").strip()
     if configured:
-        return tuple(part.strip() for part in configured.split(",") if part.strip())
-    # Literal loopback addresses only — see canonical_origin().
-    return ("127.0.0.1", f"127.0.0.1:{PORT}", "[::1]", f"[::1]:{PORT}")
+        hosts = [
+            _strip_port(part.strip()) for part in configured.split(",") if part.strip()
+        ]
+    else:
+        # IPv6 loopback is deliberately absent: pytincture's loopback check
+        # wants the bracketed "[::1]" form while Starlette splits the Host
+        # header on ":", and the two do not agree. Set GANXTERM_ALLOWED_HOSTS
+        # if you genuinely need it.
+        hosts = ["127.0.0.1"]
+
+    canonical = urlsplit(canonical_origin()).hostname
+    if canonical and canonical not in hosts:
+        hosts.append(canonical)
+    return tuple(dict.fromkeys(hosts))
 
 
 def is_loopback_deployment(origin: str) -> bool:

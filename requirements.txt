@@ -1,5 +1,9 @@
 # Server-side only. The browser gets Pyodide wheels via pytincture/micropip.
-pytincture>=1.0.0rc5
+#
+# pytincture comes from git, pinned to the tag this app was verified
+# against. PyPI carries the 1.0.0rc line too, but the source of truth is
+# the repository.
+pytincture @ git+https://github.com/pytincture/pytincture.git@v1.0.0rc8
 paramiko>=3.4.0
 bcrypt>=4.1.0
 cryptography>=42.0.0

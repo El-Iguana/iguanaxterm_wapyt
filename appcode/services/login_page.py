@@ -26,9 +26,46 @@ logger = logging.getLogger("iguanaxterm.login")
 _LOGO = (
     b'<img src="/static/el_iguana_avatar.webp" alt="" width="88" height="88" '
     b'style="width:88px;height:88px;border-radius:50%;object-fit:cover;'
-    b'display:block;margin:0 auto 14px;border:1px solid #d5d9e0;'
-    b'box-shadow:0 2px 10px rgba(15,23,42,.18);">'
+    b'display:block;margin:0 auto 14px;border:1px solid #334155;'
+    b'box-shadow:0 6px 18px rgba(0,0,0,.45);">'
 )
+
+# Dark theme, to match the app the login page leads into. Appended as one
+# override block rather than rewriting each rule in place: later rules of equal
+# specificity win, so this needs a single anchor instead of a dozen, and a
+# pytincture restyle can only cost us the theme rather than break the page.
+_DARK_CSS = b"""<style>
+  :root{color-scheme:dark;}
+  body{background-color:#0f172a !important;color:#e2e8f0;}
+  .login-container{
+    background:#111827 !important;
+    border:1px solid #1f2937;
+    box-shadow:0 18px 48px rgba(0,0,0,.55) !important;
+    min-width:320px;
+  }
+  .login-container h2{color:#f1f5f9;}
+  .input-field{
+    background:#0f172a;
+    color:#e2e8f0;
+    border:1px solid #334155 !important;
+  }
+  .input-field::placeholder{color:#64748b;}
+  .input-field:focus{
+    outline:none;
+    border-color:#38bdf8 !important;
+    box-shadow:0 0 0 3px rgba(56,189,248,.18);
+  }
+  .submit-button,.login-button{background-color:#2563eb !important;}
+  .login-button:hover,.submit-button:hover{background-color:#1d4ed8 !important;}
+  .divider{border-bottom-color:#334155 !important;}
+  .divider span{background:#111827 !important;color:#94a3b8 !important;}
+  .login-help-text{
+    background:#0f172a !important;
+    color:#93c5fd !important;
+    border:1px solid #1e3a8a;
+  }
+</style>
+</head>"""
 
 # Exact fragments pytincture emits. Each must be found, or the rewrite is stale.
 _REWRITES: tuple[tuple[bytes, bytes], ...] = (
@@ -37,6 +74,8 @@ _REWRITES: tuple[tuple[bytes, bytes], ...] = (
     (b'value="Login with Email"', b'value="Sign in"'),
     # The generic "Welcome" becomes the app's own mark.
     (b"<h2>Welcome</h2>", _LOGO + b"<h2 style=\"margin:0 0 4px\">IguanaXterm</h2>"),
+    # Appended last so it overrides the page's own stylesheet.
+    (b"</head>", _DARK_CSS),
     (
         b"<p>Please log in to continue</p>",
         b'<p style="margin:0 0 18px;color:#64748b;font-size:13px;letter-spacing:.02em">'

@@ -55,11 +55,13 @@ from wapyt import (
 from services.layout_service import LayoutService
 from services.paths import (
     SESSION_TYPES,
+    LocalNames,
     breadcrumbs,
     format_size,
     parent_path,
     session_caps,
     session_icon,
+    windows_safe_name,
 )
 from services.session_service import SessionService
 from services.sftp_service import SFTPService
@@ -100,6 +102,20 @@ _TOOLBAR_BUTTONS = (
     ("users", "Users", "mdi-account-group"),
     ("password", "Password", "mdi-key"),
 )
+
+
+def _local_platform() -> dict:
+    """
+    What the downloading machine's filesystem will refuse.
+
+    ``userAgentData.platform`` ("Windows", "macOS") where the browser has it,
+    else the older ``navigator.platform`` ("Win32", "MacIntel"). Linux gets
+    neither flag, and downloads keep their names untouched.
+    """
+    data = js.navigator.userAgentData
+    platform = str(data.platform if data else js.navigator.platform or "").lower()
+    windows = platform.startswith("win")
+    return {"windows": windows, "case_insensitive": windows or "mac" in platform}
 
 
 def _csrf_token() -> str:
@@ -1542,7 +1558,10 @@ class IguanaXterm(MainWindow):
         # else needs a destination folder to write into.
         if len(files) == 1 and not folders:
             row = files[0]
-            chosen = await filetransfer.pick_save_file(row["name"])
+            suggested = row["name"]
+            if _local_platform()["windows"]:
+                suggested = windows_safe_name(suggested)
+            chosen = await filetransfer.pick_save_file(suggested)
             if not chosen.ok:
                 if not chosen.cancelled:
                     self._toast(chosen.error or "Could not open the save dialog.")
@@ -1568,7 +1587,19 @@ class IguanaXterm(MainWindow):
             filetransfer.release(chosen.id)
             return
 
-        await self._run_download_queue(tab_id, jobs, folder_id=chosen.id)
+        # Map every local path before the first byte moves. A remote Linux
+        # host allows names this machine may not (`a:b` on Windows), and a
+        # case-insensitive disk would let `report.txt` silently overwrite
+        # `Report.txt` -- the browser gives no warning of either.
+        names = LocalNames(**_local_platform())
+        jobs = [
+            (remote, label, handle, names.map(relative) if relative else relative)
+            for remote, label, handle, relative in jobs
+        ]
+
+        await self._run_download_queue(
+            tab_id, jobs, folder_id=chosen.id, renamed=names.renamed
+        )
         filetransfer.release(chosen.id)
 
     async def _expand_folder(self, session_id: int, folder: dict) -> list:
@@ -1594,7 +1625,7 @@ class IguanaXterm(MainWindow):
         return jobs
 
     async def _run_download_queue(
-        self, tab_id: str, jobs: list, folder_id: str = ""
+        self, tab_id: str, jobs: list, folder_id: str = "", renamed: int = 0
     ) -> None:
         entry = self._sftp_tabs.get(tab_id)
         if entry is None:
@@ -1624,7 +1655,14 @@ class IguanaXterm(MainWindow):
             else:
                 self._queue_finish(tab_id, transfer_id, "failed", outcome.error)
 
-        self._toast(f"Downloaded {done} of {len(jobs)} file(s).")
+        summary = f"Downloaded {done} of {len(jobs)} file(s)."
+        if renamed:
+            # One toast, not two: a second would replace this one.
+            summary += (
+                f" Renamed {renamed} name(s) this computer cannot store as "
+                "they are on the server."
+            )
+        self._toast(summary)
 
     # ── Upload ─────────────────────────────────────────────────────────────
 

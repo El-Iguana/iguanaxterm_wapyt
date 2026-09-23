@@ -190,6 +190,28 @@ Two pool bugs showed up alongside, and both only bite on long transfers:
   `threading.Lock`. While a download held that lock, the whole event loop was
   stalled. It is now acquired on a worker thread.
 
+### Folder downloads rename for the local disk
+
+A remote Linux host allows names the downloading machine may not, and the File
+System Access API gives no warning either way. On Windows, `getFileHandle("a:b")`
+fails. On a case-insensitive disk (Windows, and macOS by default), `report.txt`
+opens the existing `Report.txt` and overwrites it without a word.
+
+`paths.LocalNames` maps the whole job list of a folder download **before**
+the first byte moves, so a renamed directory is renamed the same way for every
+file under it. It cleans segments with `windows_safe_name` on Windows and
+numbers collisions (`name (2).ext`) on case-insensitive platforms. Files and
+directories share one namespace per folder. Platform detection is
+`_local_platform()`: `userAgentData.platform`, falling back to
+`navigator.platform`. **Linux maps every name to itself.** The single-file Save
+dialog gets the cleaned name as its suggestion. The rename count joins the
+"Downloaded N of M" toast instead of getting its own, because a second toast
+replaces the first.
+
+Not handled: files that already exist in the chosen destination are still
+overwritten, as on every platform, and Windows' 260-character path limit is not
+checked.
+
 ### No CDN, ever
 
 pytincture's CSP is `script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:`,

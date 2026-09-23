@@ -59,6 +59,106 @@ def is_safe_name(name: str) -> bool:
     return "/" not in name and "\0" not in name
 
 
+# ── Local names for downloads ─────────────────────────────────────────────────
+# A remote Linux host allows names the downloading machine may not. Runs in the
+# browser, on the whole list of a folder download before any bytes move, so a
+# renamed directory is renamed the same way for every file under it.
+
+_WINDOWS_FORBIDDEN = set('<>:"/\\|?*') | {chr(code) for code in range(32)}
+_WINDOWS_RESERVED = (
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{n}" for n in range(1, 10)}
+    | {f"LPT{n}" for n in range(1, 10)}
+)
+
+
+def windows_safe_name(name: str) -> str:
+    """
+    One path segment, made valid on Windows.
+
+    Forbidden characters become ``_``; trailing dots and spaces are dropped
+    (Windows strips them silently, so ``a.`` and ``a`` would collide); a
+    reserved device name gets a ``_`` on its stem, since ``CON.log`` is still
+    the console whatever the extension.
+    """
+    cleaned = "".join("_" if char in _WINDOWS_FORBIDDEN else char for char in name)
+    cleaned = cleaned.rstrip(". ") or "_"
+    stem, dot, extension = cleaned.partition(".")
+    if stem.rstrip(" ").upper() in _WINDOWS_RESERVED:
+        cleaned = f"{stem}_{dot}{extension}"
+    return cleaned
+
+
+# Extensions that are one extension, as browsers number them: backup (2).tar.gz.
+_COMPOUND_EXTENSIONS = (".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst")
+
+
+def _numbered(name: str, n: int, is_dir: bool) -> str:
+    """``photo (2).jpg``; a directory, or a dotfile, is numbered at the end."""
+    lowered = name.lower()
+    for compound in _COMPOUND_EXTENSIONS:
+        if not is_dir and lowered.endswith(compound) and len(name) > len(compound):
+            cut = len(name) - len(compound)
+            return f"{name[:cut]} ({n}){name[cut:]}"
+    stem, dot, extension = name.rpartition(".")
+    if is_dir or not dot or not stem:
+        return f"{name} ({n})"
+    return f"{stem} ({n}).{extension}"
+
+
+class LocalNames:
+    """
+    Maps remote relative paths to local ones for one folder download.
+
+    ``windows`` cleans each segment with :func:`windows_safe_name`.
+    ``case_insensitive`` (Windows, and macOS by default) treats ``Report.txt``
+    and ``report.txt`` as one name. Either way, two names that come out the
+    same get `` (2)``, `` (3)``... rather than the second overwriting the
+    first, which the browser would do without a word.
+    """
+
+    def __init__(self, windows: bool = False, case_insensitive: bool = False) -> None:
+        self.windows = windows
+        self.case_insensitive = case_insensitive
+        self.renamed = 0
+        self._dirs: dict[str, str] = {"": ""}       # remote dir -> local dir
+        self._taken: dict[str, set[str]] = {}       # local dir -> claimed keys
+        self._files: dict[str, str] = {}            # remote file -> local file
+
+    def _key(self, name: str) -> str:
+        return name.casefold() if self.case_insensitive else name
+
+    def _claim(self, local_parent: str, name: str, is_dir: bool) -> str:
+        wanted = windows_safe_name(name) if self.windows else name
+        taken = self._taken.setdefault(local_parent, set())
+        candidate, n = wanted, 1
+        while self._key(candidate) in taken:
+            n += 1
+            candidate = _numbered(wanted, n, is_dir)
+        taken.add(self._key(candidate))
+        if candidate != name:
+            self.renamed += 1
+        return candidate
+
+    def _dir(self, remote_dir: str) -> str:
+        if remote_dir not in self._dirs:
+            parent, _, name = remote_dir.rpartition("/")
+            local_parent = self._dir(parent)
+            local = self._claim(local_parent, name, is_dir=True)
+            self._dirs[remote_dir] = f"{local_parent}/{local}" if local_parent else local
+        return self._dirs[remote_dir]
+
+    def map(self, relative: str) -> str:
+        """The local path for one remote file, ``/``-separated."""
+        relative = "/".join(part for part in relative.split("/") if part)
+        if relative not in self._files:
+            parent, _, name = relative.rpartition("/")
+            local_parent = self._dir(parent)
+            local = self._claim(local_parent, name, is_dir=False)
+            self._files[relative] = f"{local_parent}/{local}" if local_parent else local
+        return self._files[relative]
+
+
 # ── Display formatting ────────────────────────────────────────────────────────
 
 

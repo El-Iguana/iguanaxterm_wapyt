@@ -74,6 +74,11 @@ connect or fail, so it never makes the burst that restoring avoids.
 - **Download where you want it** — a folder picker and a filename prompt before
   the transfer, not a dump into `~/Downloads` (Chrome and Edge; elsewhere the
   panel says so up front)
+- **Windows- and Mac-safe folder downloads** — a Linux server allows names
+  Windows cannot store (`a:b.txt`, `CON.log`, `trail.`), and on a
+  case-insensitive disk `report.txt` would silently overwrite `Report.txt`.
+  Those are cleaned (`a_b.txt`, `CON_.log`) or numbered (`report (2).txt`)
+  instead, and the summary says how many changed. Linux keeps every name as-is
 - **Upload files or whole folders** — pick individual files, or a directory
   whose structure is recreated on the far side. Drag and drop works too.
 - **A transfer queue** with per-file progress, and cancel
@@ -343,6 +348,7 @@ resize path and the SFTP pool — everything else is unit-level. See
 | `narrow_pane_smoke.py` | the SFTP panel from 1200px down to 320px |
 | `tiled_smoke.py` | the grid, and switching layout modes |
 | `layout_smoke.py` | persistence, and that a restore dials nothing |
+| `windows_names_smoke.py` | Windows-safe folder download names, and Linux left alone |
 | `reconnect_all_smoke.py` | Reconnect all: the count, and that dials are sequential |
 | `ftp_smoke.py` | files-only FTP panes over TLS, against `ftp_target.py` |
 | `maximize_smoke.py` | zooming a tile, and that the grid model is untouched |

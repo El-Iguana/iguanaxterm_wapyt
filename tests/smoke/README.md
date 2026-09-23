@@ -74,6 +74,18 @@ with `.focus()` rather than a click. And a maximized tile covers its
 neighbours, so the other tile's button is unreachable until you restore —
 the test takes the path a person would.
 
+## Windows names smoke
+
+`windows_names_smoke.py` makes the page believe it is on Windows by overriding
+`navigator.platform` and `userAgentData`, which is all the app consults. It
+creates `~/winnames` on the SSH target through a real terminal: `a:b.txt`,
+`a?b.txt`, `Report.txt`/`report.txt`, `CON.log`, `trail.`, and `Sub/`/`sub/`.
+Then it downloads the folder into `transfer_smoke.py`'s in-memory picker. Each
+file holds one distinct byte, so a file that landed under the wrong name or
+overwrote another shows up as missing content, not just a wrong path. A second
+page without the override downloads the same folder and must keep every name
+exactly.
+
 ## Reconnect all smoke
 
 `reconnect_all_smoke.py` opens three SSH panes on one host and one FTP pane,

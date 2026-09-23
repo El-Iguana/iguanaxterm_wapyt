@@ -94,6 +94,13 @@ with sync_playwright() as p:
           "panes tile side by side",
           f"{tiled['boxes'][0]} | {tiled['boxes'][1]}")
 
+    # The tab strip is hidden while tiled, so the pane header has to say
+    # which connection this is.
+    names = pg.evaluate("""() => [...document.querySelectorAll('#ix-grid-host .ix-pane-name')]
+        .map(n => ({text: n.innerText.trim(), w: Math.round(n.getBoundingClientRect().width)}))""")
+    check(len(names) == 2 and all(n["text"] == "alpine-box" and n["w"] > 20 for n in names),
+          "each tile's header names its connection", str(names))
+
     # The whole point: buffers survived the move into the grid.
     check("GRID_MARKER_1" in term_text(pg, "pane_1")
           and "GRID_MARKER_2" in term_text(pg, "pane_2"),
@@ -132,6 +139,30 @@ with sync_playwright() as p:
     check(after > before, "resizing a tile widens it", f"{before}px -> {after}px")
     check("GRID_MARKER_1" in term_text(pg, "pane_1"), "buffer survived the resize")
 
+    # ── a narrow tile keeps its name, and the name gives way first ──────────
+    pg.evaluate("""() => {
+      const grid = document.querySelector('.grid-stack').gridstack;
+      const item = document.querySelector('#ix-grid-host .grid-stack-item[data-pane="pane_2"]');
+      grid.update(item, {w: 3});
+    }""")
+    pg.wait_for_timeout(1200)
+    narrow = pg.evaluate("""() => {
+      const pane = document.querySelector('.ix-pane[data-pane="pane_2"]');
+      const strip = pane.querySelector('.ix-pane-tabs');
+      const close = pane.querySelector('.ix-pane-close').getBoundingClientRect();
+      const box = strip.getBoundingClientRect();
+      return {
+        pane: Math.round(pane.getBoundingClientRect().width),
+        name: Math.round(pane.querySelector('.ix-pane-name').getBoundingClientRect().width),
+        overflow: strip.scrollWidth > strip.clientWidth + 1,
+        closeInside: close.right <= box.right + 1 && close.width > 0,
+      };
+    }""")
+    check(narrow["name"] > 0 and not narrow["overflow"] and narrow["closeInside"],
+          "narrow tile: name still shown, strip does not overflow, close reachable",
+          str(narrow))
+    pg.screenshot(path="/tmp/claude-1000/ix_tiled_names.png")
+
     # ── back to tabbed ──────────────────────────────────────────────────────
     pg.click('.ix-mode-btn[data-mode="tabbed"]')
     pg.wait_for_timeout(1500)
@@ -142,6 +173,9 @@ with sync_playwright() as p:
       panesInTabs: document.querySelectorAll('#ix-tabs-host .ix-pane').length,
     })""")
     check(back["gridHidden"] and back["gridItems"] == 0, "grid emptied and hidden")
+    check(pg.evaluate("""() => [...document.querySelectorAll('.ix-pane-name')]
+            .every(n => n.getBoundingClientRect().width === 0)"""),
+          "the header name hides again in tabbed mode (the tab carries it)")
     check(back["tabs"] == 2 and back["panesInTabs"] == 2,
           "panes are back in their tabs", f"{back}")
     check("GRID_MARKER_1" in term_text(pg, "pane_1")

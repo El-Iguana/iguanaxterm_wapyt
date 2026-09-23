@@ -19,6 +19,7 @@ Two conventions that are easy to get wrong:
 from __future__ import annotations
 
 import asyncio
+import html
 import traceback
 
 import js
@@ -661,6 +662,9 @@ class IguanaXterm(MainWindow):
         so ``fit()`` skips it and the widget's ResizeObserver re-fits it on the
         way back in.
         """
+        # The tab strip names the pane while tabbed; tiled, it is hidden and
+        # this is the only place the connection's name appears.
+        name = html.escape(session.get("name", ""))
         host = session.get("host", "")
         port = session.get("port")
         user = session.get("username") or ""
@@ -680,6 +684,9 @@ class IguanaXterm(MainWindow):
             f'<div class="ix-pane" data-pane="{pane_id}">'
             f'  <div class="ix-pane-tabs">'
             f'    <span class="ix-pane-grip mdi mdi-drag-vertical" title="Drag to move"></span>'
+            f'    <span class="ix-pane-name" title="{name}">'
+            f'      <span class="mdi {session_icon(session.get("type", "ssh"))}"></span>'
+            f'      <span class="ix-pane-name-text">{name}</span></span>'
             f'    <button type="button" class="ix-pane-tab" data-pane-tab="terminal"'
             f'            data-pane="{pane_id}" aria-selected="true"{term_attrs}>'
             f'      <span class="mdi mdi-console-line"></span><span>Terminal</span></button>'
@@ -2178,6 +2185,15 @@ _PANE_CSS = """
 .ix-pane-tab:disabled{opacity:.4;cursor:not-allowed;}
 .ix-pane-tab .mdi{font-size:15px;}
 .ix-pane-spacer{flex:1 1 auto;}
+/* Tiled only, like the grip. Shrinks before anything else in the strip, and
+   outlives the host label in a narrow tile since it is the one that says
+   which connection this is. */
+.ix-pane-name{display:none;}
+.grid-stack .ix-pane-name{display:inline-flex;align-items:center;gap:5px;
+  flex:0 1 auto;min-width:0;margin:0 8px 0 2px;color:#e2e8f0;
+  font:600 12px system-ui,sans-serif;}
+.ix-pane-name .mdi{font-size:14px;color:#94a3b8;flex:0 0 auto;}
+.ix-pane-name-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .ix-pane-host{color:#64748b;font:11px ui-monospace,Menlo,Consolas,monospace;
   padding-right:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   max-width:40%;}

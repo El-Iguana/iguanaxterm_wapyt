@@ -196,23 +196,74 @@ the way back; `_on_tab_change` also calls `fit()` explicitly.
 
 ## Planned: GridStack tiling
 
-A wapyt `GridPanel` widget wrapping [GridStack](https://gridstackjs.com), so
-terminals and file browsers can be tiled and resized rather than tabbed. Notes
-for whoever picks it up:
+Tiled workspace where each cell is one connection carrying its own Terminal and
+Files tabs, [GridStack](https://gridstackjs.com) doing the tiling. Design
+decided 2026-09-23; not built yet.
 
-- **Vendor it, do not CDN it.** Same constraint as xterm: pytincture serves
-  `script-src 'self'`. GridStack is MIT, so bundling is fine. Decide early
-  whether it lives in the widgetset (paid for by every wapyt app on every page
-  load) or in the consuming app served from its own mount — xterm went the
-  second way for exactly that reason, and GridStack is smaller but not free.
-- **Terminals must not be re-mounted on drag.** GridStack moves DOM nodes; an
-  xterm that gets detached and re-attached loses its buffer. Move the grid
-  item's container, never the terminal's host element, and call `fit()` on
-  resize-stop rather than during the drag.
-- **Resize storms.** Each grid resize ends in a PTY resize message. Debounce on
-  `resizestop`, not on every intermediate frame.
-- **Layout persistence** belongs in a BFF service, per user, alongside the
-  session library — `GridStack.save()` returns a serialisable layout.
+### Decisions
+
+- **Tabbed and tiled are both modes**, switched from the toolbar, not one
+  replacing the other.
+- **A cell is one connection instance**, not one saved session: connect to the
+  same host twice and get two cells.
+- **GridStack is vendored in this app**, at `appcode/vendor/gridstack/` served
+  from its own mount, exactly as xterm is at `service.py:197`. It stays out of
+  wapyt, whose manifest loads every asset on every page for every app.
+- **A saved layout restores cells but does not dial.** Each restored cell shows
+  a Reconnect button. Auto-dialling N sessions on page load walks straight into
+  the `MaxStartups` banner resets that `ssh.py`'s retry exists to survive.
+
+### The abstraction
+
+Two workspace modes stay affordable only if the content is mode-agnostic:
+
+```
+Pane (one connection)          <- every behaviour lives here
+  .ix-pane root · mini tab strip [Terminal][Files]
+  Terminal widget (mounted once)
+  SFTP panel + DataTable (built lazily on first Files click)
+
+TabbedHost / TiledHost         <- thin: add · remove · focus
+```
+
+A host only decides where a pane root lives. Put terminal or SFTP logic in
+either one and there will be two copies of it within a month. Note this also
+retires `_open_sftp` as a top-level-tab maker in *both* modes — files become a
+tab inside the connection's own pane.
+
+### Traps, in the order they bite
+
+- **Reparenting a live xterm is safe — measured, not assumed.** An earlier note
+  here claimed a detached and re-attached xterm loses its buffer. It does not.
+  Spiked 2026-09-23 against a real PTY (`tests/smoke/reparent_spike.py`): with
+  313 lines of scrollback, moving the pane subtree to a new parent kept every
+  line, kept the socket open, kept stdin working, and the `ResizeObserver`
+  re-fitted 139x24 -> 104x24 and back on its own. Zero console errors. So the
+  mode toggle and GridStack drag are both a plain `appendChild`.
+
+  Still move the **pane root**, never the terminal's own host element: the
+  widget's observer is bound to that element and the spike only exercised
+  moving an ancestor.
+- **The SFTP pool breaks as soon as two cells share a host.** It is keyed
+  `(user_id, session_id)` (`sftp_service.py:99`) and tab close calls
+  `disconnect_async`, which closes it outright, so closing one cell kills the
+  other's file browser. Needs retain/release refcounting, torn down at zero by
+  the existing idle eviction. This lands with the Pane work, not with the grid.
+- **The SFTP toolbar does not fit a cell.** Five labelled buttons measure
+  ~520px against a ~460px three-across cell. Use a container query
+  (`container-type: inline-size` on the pane) to drop labels to icons — no JS,
+  no resize listeners. The breadcrumbs need middle-ellipsis and the transfer
+  queue's `max-height:210px` needs to be a fraction of cell height.
+- **Resize storms need a widgetset change.** `terminal.js` already suppresses
+  redundant PTY messages when cols/rows are unchanged, but its `ResizeObserver`
+  fires per frame during a drag and an app cannot intercept it. wapyt needs a
+  `fit_debounce_ms` option (~120ms).
+- **Grid items need `min-height: 0`**, the same discipline as the layout cell
+  fix above. Without it a terminal pushes its item wider instead of scrolling —
+  the 81px-pane / 20-column bug again.
+- **Layout persistence** belongs in a per-user BFF service alongside the session
+  library; `GridStack.save()` returns a serialisable layout. Drop restored cells
+  whose session was deleted or belongs to someone else.
 
 ## Live smoke test
 

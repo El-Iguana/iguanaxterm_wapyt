@@ -37,6 +37,27 @@ ordering, streaming, progress, the queue, the routes — and the stub returns a
 real `WritableStream`, since `response.body.pipeTo()` rejects anything else and
 the genuine `FileSystemWritableFileStream` is one.
 
+## Reparent spike
+
+`reparent_spike.py` answers one architectural question for the planned
+GridStack tiling: can a live, PTY-connected xterm be moved to a different DOM
+parent without losing its buffer, its socket or its stdin?
+
+It can. With 300 lines of scrollback the buffer came through untouched, the
+command typed after the move executed, and the `ResizeObserver` re-fitted the
+PTY 139x24 -> 104x24 and back unaided. So the tabbed/tiled toggle and grid drag
+are both a plain `appendChild` of the pane root, not an absolute-position
+overlay.
+
+It seeds its own `alpine-box` session through the real dialog, so it needs only
+the SSH target and the service:
+
+```bash
+python3 tests/smoke/reparent_spike.py
+```
+
+Keep it: it is the regression test for anything that moves a mounted terminal.
+
 ## Throttle probe
 
 `throttle_probe.py` measures how well the SSH connect retry absorbs a host that

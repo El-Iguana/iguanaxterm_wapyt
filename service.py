@@ -198,6 +198,13 @@ def build_app():
         "/xterm", StaticFiles(directory=str(APPCODE / "vendor" / "xterm")), name="xterm"
     )
 
+    # Application artwork. Same-origin for the same CSP reason as xterm:
+    # img-src allows https:, but keeping it local means the branding still
+    # renders on an air-gapped deployment.
+    application.mount(
+        "/static", StaticFiles(directory=str(APPCODE / "static")), name="static"
+    )
+
     @application.on_event("shutdown")
     async def _close_pool() -> None:
         sftp_pool.close_all()

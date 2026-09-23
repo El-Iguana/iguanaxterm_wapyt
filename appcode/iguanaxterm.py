@@ -144,6 +144,29 @@ class IguanaXterm(MainWindow):
         )
         self.body = body
 
+        # The sidebar is a brand header above the session tree. Built as HTML
+        # because it is two static elements, then the Tree is mounted into the
+        # host div below it.
+        sidebar = body.get_cell("sidebar")
+        sidebar_el = (
+            sidebar.getContainer() if hasattr(sidebar, "getContainer") else sidebar
+        )
+        sidebar_el.innerHTML = (
+            '<div class="ix-sidebar">'
+            '  <div class="ix-brand">'
+            # 128px WebP cropped to the head: the full portrait is 783KB and
+            # would be fetched in its entirety to render a 40px avatar.
+            '    <img class="ix-brand-logo" src="/static/el_iguana_avatar.webp"'
+            '         alt="" width="40" height="40" decoding="async">'
+            '    <div class="ix-brand-text">'
+            '      <span class="ix-brand-name">IguanaXterm</span>'
+            '      <span class="ix-brand-sub">SSH &middot; Telnet &middot; SFTP</span>'
+            '    </div>'
+            '  </div>'
+            '  <div class="ix-sidebar-tree" id="ix-tree-host"></div>'
+            f"</div><style>{_SIDEBAR_CSS}</style>"
+        )
+
         self.tree = Tree(
             TreeConfig(
                 filterable=True,
@@ -158,7 +181,7 @@ class IguanaXterm(MainWindow):
                     TreeAction("delete", "Delete", "mdi-delete", scope="leaf", danger=True),
                 ],
             ),
-            container=body.get_cell("sidebar"),
+            root="#ix-tree-host",
         )
         self.tree.on_select(self._on_tree_select)
         self.tree.on_activate(lambda payload: self._connect(payload.get("id")))
@@ -1306,6 +1329,20 @@ _TOOLBAR_CSS = """
 .ix-toolbar-sep{width:1px;height:20px;margin:0 6px;background:#334155;}
 .ix-toolbar-spacer{flex:1 1 auto;}
 .ix-toolbar-user{color:#64748b;font-size:12px;padding-right:6px;}
+"""
+
+_SIDEBAR_CSS = """
+.ix-sidebar{display:flex;flex-direction:column;height:100%;min-height:0;}
+.ix-brand{display:flex;align-items:center;gap:10px;padding:10px 12px;flex:0 0 auto;
+  background:#111827;border-bottom:1px solid #1f2937;}
+.ix-brand-logo{flex:0 0 auto;width:40px;height:40px;border-radius:50%;
+  object-fit:cover;border:1px solid #334155;background:#0f172a;}
+.ix-brand-text{display:flex;flex-direction:column;min-width:0;line-height:1.25;}
+.ix-brand-name{font:600 14px system-ui,sans-serif;color:#e2e8f0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ix-brand-sub{font:10.5px system-ui,sans-serif;color:#64748b;letter-spacing:.03em;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ix-sidebar-tree{flex:1 1 auto;min-height:0;}
 """
 
 _SFTP_CSS = """

@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "iguanaxterm"
+version = "2.0.0"
+description = "Browser-based SSH/Telnet terminal manager — pytincture + wapyt"
+readme = "README.md"
+license = { text = "AGPL-3.0-or-later" }
+requires-python = ">=3.13,<3.15"
+authors = [{ name = "OldManGan", email = "eliguana@protonmail.com" }]
+dependencies = [
+    "paramiko>=3.4.0",
+    "bcrypt>=4.1.0",
+    "cryptography>=42.0.0",
+    "uvicorn[standard]>=0.30.0",
+    "python-multipart>=0.0.9",
+    "argon2-cffi>=23.1.0",
+    "pytincture",
+    "wapyt",
+]
+
+[project.urls]
+homepage = "https://github.com/El-Iguana/iguanaxterm"
+
+[tool.pytest.ini_options]
+# tests/smoke needs a container, a running service and playwright, so it is not
+# part of the default run. Its file is named to avoid collection too, belt and
+# braces — see tests/smoke/README.md.
+testpaths = ["tests"]
+norecursedirs = ["smoke"]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.uv.sources]
+pytincture = { path = "../pytincture", editable = true }
+# Server-side only, for widgetset discovery: pytincture AST-walks the app's
+# imports and reads __widgetset__ from the installed distribution. The browser
+# installs the dev wheel from appcode/ instead of this checkout.
+# NOT editable, deliberately. pytincture's widgetset discovery reads
+# __widgetset__ from the installed distribution, and an editable install exposes
+# only a .pth plus dist-info — distribution.files never lists wapyt/__init__.py,
+# and PathFinder.find_spec() returns origin=None for the editable finder. The
+# result is a silent `widgetlib: ""` and an app with no widgets. Re-run
+# `uv sync --reinstall-package wapyt` after changing wapyt's Python wrappers;
+# asset edits go through scripts/dev_wheel.sh instead.
+wapyt = { path = "../wa_pytincture_widgetset", editable = false }
+
+[tool.setuptools]
+py-modules = ["service"]

@@ -1,0 +1,23 @@
+services:
+
+  iguanaxterm:
+    build:
+      context: .
+      dockerfile: Containerfile
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    env_file:
+      - .env
+    environment:
+      - GANXTERM_DATA_DIR=/data
+      # pytincture will not serve authenticated plain HTTP off loopback. Set
+      # these to the public https origin and put TLS in front before exposing
+      # this beyond the host.
+      - GANXTERM_CANONICAL_ORIGIN=${GANXTERM_CANONICAL_ORIGIN:-http://127.0.0.1:8765}
+      - GANXTERM_ALLOWED_HOSTS=${GANXTERM_ALLOWED_HOSTS:-}
+    volumes:
+      - ganxterm_data:/data
+
+volumes:
+  ganxterm_data:

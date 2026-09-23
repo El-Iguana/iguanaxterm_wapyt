@@ -1,6 +1,6 @@
 # IguanaXterm
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-2.0.0-green.svg)]()
 
 A browser-based SSH/Telnet terminal manager with SFTP. Manage all your remote
@@ -125,4 +125,7 @@ uv run --with pytest python -m pytest tests/ -q
 
 ## License
 
-AGPL-3.0-or-later. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
+
+xterm.js is vendored under `appcode/vendor/xterm/` and keeps its own MIT
+licence, reproduced there as `LICENSE.xterm`.

@@ -1682,7 +1682,10 @@ class IguanaXterm(MainWindow):
                                 placeholder="••••••" if has_password else ""),
                     FieldConfig(id="private_key", label="Private key (PEM)",
                                 type="textarea", rows=5, span=2,
-                                help="RSA, Ed25519, ECDSA or DSA."
+                                # Not DSA: paramiko 5 dropped DSSKey, and
+                                # ssh.py builds its loader list from what the
+                                # installed paramiko actually exposes.
+                                help="RSA, Ed25519 or ECDSA."
                                      + (" Stored key in place." if has_key else ""),
                                 placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
                                             if not has_key else "Stored — leave blank to keep"),

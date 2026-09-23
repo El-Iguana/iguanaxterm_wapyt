@@ -4,39 +4,76 @@
 [![Version](https://img.shields.io/badge/version-2.0.0-green.svg)]()
 
 A browser-based SSH/Telnet terminal manager with SFTP. Manage all your remote
-connections from a single web UI — no client software required.
+connections from a single web UI — no client software required. Tile them side
+by side, or keep them in tabs; either way the workspace is there when you come
+back.
 
 ![IguanaXterm](appcode/static/el_iguana.png)
 
 Version 2 is a rewrite onto [pytincture](https://github.com/pytincture/pytincture)
-and the [wapyt](../wa_pytincture_widgetset) widgetset: the UI is Python running
-in the browser under Pyodide instead of 1,350 lines of hand-written JavaScript,
-and the hand-rolled REST API and token store are replaced by pytincture's
-backend-for-frontend layer.
+and the [wapyt](https://github.com/WAwesome-AI/wa_pytincture_widgetset)
+widgetset: the UI is Python running in the browser under Pyodide instead of
+1,350 lines of hand-written JavaScript, and the hand-rolled REST API and token
+store are replaced by pytincture's backend-for-frontend layer.
 
 ## Features
 
+### Workspace
+
+Every connection is a **pane** carrying its own terminal *and* its own file
+browser behind a two-entry tab strip — no more hunting for the file tab that
+belongs to a given host. Connect to the same host twice and you get two panes
+with two independent shells.
+
+The workspace lays panes out two ways, switched from the toolbar:
+
+- **Tabbed** — one pane at a time, the classic layout.
+- **Tiled** — panes in a drag-and-resize grid ([GridStack](https://gridstackjs.com)),
+  so several sessions stay visible at once. Drag a pane by its grip, resize
+  from the corner; the remote PTY follows the tile.
+
+Switching modes moves panes, it does not rebuild them: scrollback, sockets and
+whatever you were typing all survive the switch, in both directions.
+
+**Your layout comes back.** Mode, tile positions and sizes, which tab each pane
+was on and the directory it was browsing are all saved per user. Restored panes
+deliberately do **not** reconnect — each one offers a Reconnect button, because
+dialling every saved session at once on page load is how you trip a server's
+`MaxStartups` limit and get a screen full of banner errors.
+
+### Connections
+
 - **SSH & Telnet** — connect to any host directly in the browser
-- **SFTP** — browse, filter, upload (drag and drop), download, rename, delete
-- **Multi-tab** — several terminals and file browsers at once, each kept alive
-  in the background
 - **Session library** — saved connections organised into folders, with a filter
 - **Terminal search** — Ctrl+F over the scrollback
 - **Auto-reconnect** — exponential backoff, up to 5 attempts
+- **Transient-failure retry** — a reset banner or a refused connection is
+  retried up to 3 times before you ever see an error
 - **Host-key pinning** — trust on first use, and a refusal (not a silent accept)
   when a host key changes
-- **Any key type** — RSA, Ed25519, ECDSA, with passphrase support
+- **Key auth** — RSA, Ed25519 and ECDSA, with passphrase support (DSA is gone;
+  Paramiko 5 dropped it)
+
+### Files
+
+- **SFTP per pane** — browse, filter, rename, delete, make folders
+- **Download where you want it** — a folder picker and a filename prompt before
+  the transfer, not a dump into `~/Downloads` (Chrome and Edge; elsewhere the
+  panel says so up front)
+- **Upload files or whole folders** — pick individual files, or a directory
+  whose structure is recreated on the far side. Drag and drop works too.
+- **A transfer queue** with per-file progress, and cancel
+- **Narrow-pane aware** — in a small tile the toolbar collapses to icons and
+  secondary columns give way, so the filename never gets squeezed out
+
+### Accounts
+
 - **Multi-user** — private session libraries, plus an admin panel
 - **Encrypted at rest** — SSH passwords and private keys under Fernet (AES-128)
 
 ## Planned
 
-- **Tiled panes via [GridStack](https://gridstackjs.com/#demo)** — drag and
-  resize terminals and file browsers into a grid instead of stacking them in
-  tabs, so several sessions stay visible at once. Layouts save per user.
-  Wanted as a wapyt widget so any pytincture app can use it; GridStack is MIT
-  and would be vendored and served same-origin like xterm, since pytincture's
-  CSP blocks CDNs.
+- **Per-pane maximize** — zoom one tile to fill the workspace and back.
 - **Transfer resume** — HTTP range requests for interrupted downloads.
 
 ## Stack
@@ -49,6 +86,7 @@ backend-for-frontend layer.
 | Telnet | asyncio + an RFC 854/1073 IAC parser |
 | Auth | pytincture sessions + bcrypt |
 | Terminal | xterm.js 5.5, vendored and served same-origin |
+| Tiling | GridStack 14, vendored, loaded on demand |
 
 ## Install
 
@@ -234,7 +272,7 @@ unrecoverable.
 
 One volume, `ganxterm_data`, mounted at `/data`:
 
-- `iguanaxterm.db` — users and saved connection profiles
+- `iguanaxterm.db` — users, saved connection profiles and workspace layouts
 - `secret.key` — Fernet key. **Back this up.** Losing it means every stored
   credential is unrecoverable.
 - `session.key` — cookie-signing secret; losing it just logs everyone out.
@@ -256,15 +294,47 @@ See `CLAUDE.md` for the framework-specific pitfalls — they are not obvious and
 several of them fail silently.
 
 ```bash
+# unit tests: plain CPython, no browser, no containers
 uv run --with pytest python -m pytest tests/ -q
 
-# after editing any wapyt asset
+# after editing any wapyt asset, rebuild the dev wheel
 (cd ../wa_pytincture_widgetset && ./scripts/dev_wheel.sh ../iguanaxterm_wapyt/appcode)
+
+# a local container that identifies itself as IguanaXterm, on 127.0.0.1:8765
+./scripts/podman-run.sh
 ```
+
+### Smoke tests
+
+`tests/smoke/` drives the real UI in a real browser against a throwaway SSH
+container. It is the only thing that exercises the WebSocket relay, the PTY
+resize path and the SFTP pool — everything else is unit-level. See
+[tests/smoke/README.md](tests/smoke/README.md) for setup.
+
+| Script | Covers |
+|---|---|
+| `live_ssh_smoke.py` | terminal, PTY sizing, search, SFTP browsing |
+| `transfer_smoke.py` | download, folder download, upload, the queue |
+| `upload_race_smoke.py` | the file-picker activation race |
+| `pane_smoke.py` | panes, lazy file mounting, independent shells |
+| `narrow_pane_smoke.py` | the SFTP panel from 1200px down to 320px |
+| `tiled_smoke.py` | the grid, and switching layout modes |
+| `layout_smoke.py` | persistence, and that a restore dials nothing |
+| `reparent_spike.py` | that a live terminal survives being moved |
+| `resize_storm_probe.py` | PTY resize traffic during a drag (a measurement) |
+
+Two are worth knowing about even if you never run them. `reparent_spike.py`
+is why the tiling works the way it does: moving a mounted xterm to a new DOM
+parent keeps its buffer, socket and stdin, so switching modes and dragging a
+tile are both a plain `appendChild`. `resize_storm_probe.py` is why
+`fit_debounce_ms` exists — one 1.3s resize drag sent **41** PTY resizes before
+it, and **1** after.
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
 
-xterm.js is vendored under `appcode/vendor/xterm/` and keeps its own MIT
-licence, reproduced there as `LICENSE.xterm`.
+xterm.js and GridStack are vendored under `appcode/vendor/` and keep their own
+MIT licences, reproduced there as `LICENSE.xterm` and `LICENSE.gridstack`.
+Both are served same-origin rather than from a CDN, which pytincture's CSP
+blocks.

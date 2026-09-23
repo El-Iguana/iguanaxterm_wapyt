@@ -8,6 +8,11 @@ grid items -- materially more code. Everything downstream turns on this.
 """
 from playwright.sync_api import sync_playwright
 
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from harness import reset_workspace  # noqa: E402
+
+
 APP = "http://127.0.0.1:8799/iguanaxterm"
 results = []
 
@@ -69,6 +74,7 @@ with sync_playwright() as p:
         pg.fill('input[name="password"]', "testpass123")
         pg.click('input[type="submit"]')
     pg.wait_for_selector(".ix-toolbar", timeout=180000)
+    reset_workspace(pg)
 
     # Seed the session through the real dialog unless it is already there.
     pg.wait_for_timeout(500)
@@ -113,11 +119,20 @@ with sync_playwright() as p:
     # parent of a realistic size -- exactly what a host switch would do.
     moved = pg.evaluate("""() => {
       const term = document.querySelector('.wapyt-terminal');
-      const pane = term.parentElement;               // the tab cell's content
+      // The PANE ROOT, which is what the design says to move. Moving whatever
+      // happens to be the terminal's parent picks up .ix-pane-body, whose
+      // children are absolutely positioned: outside its flex context it has
+      // zero height, the terminal gets 900x0, and fit() correctly skips it --
+      // which reads as "the reparent broke the terminal" when it did not.
+      const pane = term.closest('.ix-pane') || term.parentElement;
       const dest = document.createElement('div');
       dest.id = 'spike-dest';
+      // Clear of the toolbar: it grew when the layout-mode switch was added,
+      // and a box at top:60 ends up underneath it, so clicks into the moved
+      // terminal hit a toolbar button instead.
       dest.style.cssText =
-        'position:fixed;left:40px;top:60px;width:900px;height:560px;z-index:5;background:#000';
+        'position:fixed;left:40px;top:140px;width:900px;height:560px;' +
+        'z-index:9500;background:#000';
       document.body.appendChild(dest);
       window.__spikeOrigin = pane.parentElement;
       dest.appendChild(pane);                        // <-- the reparent
@@ -135,7 +150,16 @@ with sync_playwright() as p:
           f"{after['renderedRows']} rows rendered, {after['renderedText']} chars")
 
     # Socket and stdin: type into it in its new home.
-    pg.click("#spike-dest .xterm-screen")
+    # Focus the helper textarea directly rather than clicking: the moved box
+    # overlaps app chrome, and hit-testing which element is on top is not what
+    # this spike is measuring.
+    pg.evaluate("""() => {
+      // xterm's input sink is a textarea inside .xterm-helpers; its class name
+      // has changed across versions, so find it by tag under the moved box.
+      const ta = document.querySelector('#spike-dest textarea');
+      if (!ta) throw new Error('no xterm textarea under #spike-dest');
+      ta.focus();
+    }""")
     pg.keyboard.type("echo SPIKE_AFTER_MOVE_OK\n")
     pg.wait_for_timeout(2500)
     live = pg.evaluate("""() => {

@@ -51,6 +51,7 @@ from wapyt import (
     TreeItem,
 )
 
+from services.layout_service import LayoutService
 from services.paths import breadcrumbs, format_size, parent_path, session_icon
 from services.session_service import SessionService
 from services.sftp_service import SFTPService
@@ -143,13 +144,22 @@ class IguanaXterm(MainWindow):
         self._sftp_tabs: dict[str, dict] = {}   # pane id -> {table, session_id, path}
         self._tab_counter = 0
         self._mode = "tabbed"      # or "tiled"
+        self._restoring = False    # suppresses saves while rebuilding
+        self._save_task = None
         self._grid = None          # the GridStack instance, once loaded
         self._grid_proxies: list = []
         self._me: dict = {}
 
         self._build_chrome()
         _spawn(self._load_identity(), "identity load")
-        _spawn(self._reload_sessions(), "session load")
+        _spawn(self._boot_workspace(), "workspace boot")
+
+    async def _boot_workspace(self) -> None:
+        # The layout names session ids, so the session list has to be in hand
+        # before it can be validated against -- hence one coroutine rather than
+        # two racing ones.
+        await self._reload_sessions()
+        await self._restore_layout()
 
     # ------------------------------------------------------------------
     # Chrome
@@ -301,6 +311,11 @@ class IguanaXterm(MainWindow):
             closer = event.target.closest("[data-pane-close]")
             if closer:
                 self._close_pane(closer.dataset.paneClose)
+                return
+
+            reconnect = event.target.closest("[data-reconnect]")
+            if reconnect:
+                self._connect_pane(reconnect.dataset.reconnect)
                 return
 
             mode_button = event.target.closest("[data-mode]")
@@ -467,7 +482,14 @@ class IguanaXterm(MainWindow):
             return
         self._open_pane(int(str(node_id)[5:]))
 
-    def _open_pane(self, session_id: int, focus: str = "terminal") -> str | None:
+    def _open_pane(
+        self,
+        session_id: int,
+        focus: str = "terminal",
+        *,
+        connect: bool = True,
+        restore: dict | None = None,
+    ) -> str | None:
         session = self._session(session_id)
         if session is None:
             return None
@@ -492,9 +514,59 @@ class IguanaXterm(MainWindow):
         container = cell.getContainer() if hasattr(cell, "getContainer") else cell
         container.innerHTML = self._pane_html(pane_id, session, is_telnet)
 
+        self._panes[pane_id] = {
+            "session_id": session_id,
+            "name": session["name"],
+            "terminal": None,
+            "telnet": is_telnet,
+            "tab": "terminal",
+            "files_mounted": False,
+            # A brand-new pane carries a size but no position, so GridStack
+            # auto-places it. Giving it x=0,y=0 -- which a default geometry
+            # does -- stacks every new tile under the last one instead of
+            # filling the row. Only a restored pane names a position.
+            "geometry": (
+                {
+                    "x": int(restore.get("x") or 0),
+                    "y": int(restore.get("y") or 0),
+                    "w": int(restore.get("w") or 6),
+                    "h": int(restore.get("h") or 7),
+                }
+                if restore
+                else {"w": 6, "h": 7}
+            ),
+            # Where a restored pane should end up once it is dialled.
+            "restore": restore or None,
+        }
+
+        self.tabs.set_active(pane_id)
+        if self._mode == "tiled":
+            self._attach_to_grid(pane_id)
+
+        if connect:
+            self._connect_pane(pane_id)
+            if focus == "files":
+                self._pane_select(pane_id, "files")
+        else:
+            self._show_reconnect(pane_id, session)
+
+        self._schedule_layout_save()
+        return pane_id
+
+    def _connect_pane(self, pane_id: str) -> None:
+        """Dial a pane's terminal, replacing any reconnect placeholder."""
+        pane = self._panes.get(pane_id)
+        if pane is None or pane["terminal"] is not None:
+            return
+
+        host = js.document.getElementById(f"pane-term-{pane_id}")
+        if not host:
+            return
+        host.innerHTML = ""
+
         terminal = Terminal(
             TerminalConfig(
-                ws_url=f"/ws/terminal/{session_id}",
+                ws_url=f"/ws/terminal/{pane['session_id']}",
                 theme=TERMINAL_THEME,
                 search=True,
                 reconnect=True,
@@ -503,25 +575,40 @@ class IguanaXterm(MainWindow):
                 # drag sent 41 of them. Wait for the drag to settle instead.
                 fit_debounce_ms=120,
             ),
-            container=js.document.getElementById(f"pane-term-{pane_id}"),
+            container=host,
         )
         terminal.on_error(lambda payload: self._toast(payload.get("message", "Error")))
+        pane["terminal"] = terminal
 
-        self._panes[pane_id] = {
-            "session_id": session_id,
-            "name": session["name"],
-            "terminal": terminal,
-            "telnet": is_telnet,
-            "tab": "terminal",
-            "files_mounted": False,
-        }
-
-        self.tabs.set_active(pane_id)
-        if self._mode == "tiled":
-            self._attach_to_grid(pane_id)
-        if focus == "files":
+        restore = pane.pop("restore", None)
+        if restore and restore.get("tab") == "files" and not pane["telnet"]:
+            pane["restore_path"] = restore.get("path") or ""
             self._pane_select(pane_id, "files")
-        return pane_id
+        else:
+            terminal.fit()
+            terminal.focus()
+
+    def _show_reconnect(self, pane_id: str, session: dict) -> None:
+        """
+        A restored pane, not yet dialled.
+
+        Restoring a layout deliberately does not connect: N simultaneous SSH
+        dials on page load is the pattern that trips MaxStartups and produces
+        the banner resets ssh.py's retry exists to survive.
+        """
+        host = js.document.getElementById(f"pane-term-{pane_id}")
+        if not host:
+            return
+        label = f"{session.get('username') or ''}@{session.get('host', '')}".lstrip("@")
+        host.innerHTML = (
+            f'<div class="ix-reconnect">'
+            f'  <span class="mdi mdi-power-plug-off ix-reconnect-icon"></span>'
+            f'  <div class="ix-reconnect-name">{session["name"]}</div>'
+            f'  <div class="ix-reconnect-host">{label}</div>'
+            f'  <button type="button" class="ix-reconnect-btn" data-reconnect="{pane_id}">'
+            f'    <span class="mdi mdi-connection"></span><span>Reconnect</span></button>'
+            f"</div>"
+        )
 
     def _pane_html(self, pane_id: str, session: dict, is_telnet: bool) -> str:
         """
@@ -586,13 +673,15 @@ class IguanaXterm(MainWindow):
                 panel.hidden = name != which
 
         if which == "terminal":
-            pane["terminal"].fit()
-            pane["terminal"].focus()
+            if pane["terminal"] is not None:
+                pane["terminal"].fit()
+                pane["terminal"].focus()
         elif not pane["files_mounted"]:
             # Mounted on first use, so a pane that is only ever a terminal never
             # dials SFTP at all.
             pane["files_mounted"] = True
             _spawn(self._mount_files(pane_id), "sftp mount")
+        self._schedule_layout_save()
 
     async def _mount_files(self, pane_id: str) -> None:
         pane = self._panes.get(pane_id)
@@ -642,17 +731,22 @@ class IguanaXterm(MainWindow):
             container=panel["table_cell"],
         )
 
-        self._sftp_tabs[pane_id] = {"table": table, "session_id": session_id, "path": ""}
+        start_path = pane.pop("restore_path", "")
+        self._sftp_tabs[pane_id] = {
+            "table": table,
+            "session_id": session_id,
+            "path": start_path,
+        }
         table.on_activate(lambda payload: self._sftp_activate(pane_id, payload))
         table.on_action(lambda payload: self._sftp_action(pane_id, payload))
         table.on_drop(lambda payload: self._sftp_upload(pane_id, payload))
 
-        await self._sftp_navigate(pane_id, "")
+        await self._sftp_navigate(pane_id, start_path)
 
     def _on_tab_change(self, payload: dict) -> None:
         pane_id = payload.get("id") if isinstance(payload, dict) else payload
         pane = self._panes.get(pane_id)
-        if pane is None or pane["tab"] != "terminal":
+        if pane is None or pane["tab"] != "terminal" or pane["terminal"] is None:
             return
         # A background pane is hidden, not unmounted, so its terminal has no
         # dimensions while inactive and skips fitting. Re-fit on the way back in
@@ -667,8 +761,10 @@ class IguanaXterm(MainWindow):
             return
 
         # Closing the pane must close the socket. The dhxpyt rewrite left every
-        # terminal it ever opened running on the server.
-        pane["terminal"].destroy()
+        # terminal it ever opened running on the server. A restored pane that
+        # was never dialled has nothing to close.
+        if pane["terminal"] is not None:
+            pane["terminal"].destroy()
 
         sftp = self._sftp_tabs.pop(pane_id, None)
         if sftp is not None:
@@ -677,6 +773,7 @@ class IguanaXterm(MainWindow):
         if observer is not None:
             observer.disconnect()
         self._remove_grid_item(pane_id)
+        self._schedule_layout_save()
         if pane.get("sftp_held"):
             # Drops this pane's hold only. Another pane on the same host keeps
             # the channel alive.
@@ -760,7 +857,7 @@ class IguanaXterm(MainWindow):
             # Fitting during the drag is wasted work; the pane is mid-flight and
             # every intermediate size is thrown away.
             for event in ("resizestop", "dragstop", "change"):
-                proxy = create_proxy(lambda *_args: self._fit_visible_panes())
+                proxy = create_proxy(lambda *_args: self._on_grid_change())
                 self._grid_proxies.append(proxy)
                 self._grid.on(event, proxy)
 
@@ -769,6 +866,7 @@ class IguanaXterm(MainWindow):
             self._attach_to_grid(pane_id)
         self._sync_mode_buttons()
         self._fit_visible_panes()
+        self._schedule_layout_save()
 
     def _go_tabbed(self) -> None:
         for pane_id in list(self._panes):
@@ -784,6 +882,7 @@ class IguanaXterm(MainWindow):
         self._mode = "tabbed"
         self._sync_mode_buttons()
         self._fit_visible_panes()
+        self._schedule_layout_save()
 
     def _close_pane(self, pane_id: str) -> None:
         """
@@ -806,8 +905,14 @@ class IguanaXterm(MainWindow):
 
         widget = js.document.createElement("div")
         widget.className = "grid-stack-item"
-        widget.setAttribute("gs-w", "6")
-        widget.setAttribute("gs-h", "7")
+        geometry = self._panes.get(pane_id, {}).get("geometry") or {}
+        widget.setAttribute("gs-w", str(geometry.get("w") or 6))
+        widget.setAttribute("gs-h", str(geometry.get("h") or 7))
+        if geometry.get("x") is not None and geometry.get("y") is not None:
+            widget.setAttribute("gs-x", str(geometry["x"]))
+            widget.setAttribute("gs-y", str(geometry["y"]))
+        else:
+            widget.setAttribute("gs-auto-position", "true")
         widget.dataset.pane = pane_id
         content = js.document.createElement("div")
         content.className = "grid-stack-item-content"
@@ -832,10 +937,106 @@ class IguanaXterm(MainWindow):
             # caller when switching modes.
             self._grid.removeWidget(item, True)
 
+    def _on_grid_change(self) -> None:
+        self._fit_visible_panes()
+        self._schedule_layout_save()
+
     def _fit_visible_panes(self) -> None:
-        for pane_id, pane in self._panes.items():
-            if pane["tab"] == "terminal":
+        for pane in self._panes.values():
+            if pane["tab"] == "terminal" and pane["terminal"] is not None:
                 pane["terminal"].fit()
+
+    # ------------------------------------------------------------------
+    # Layout persistence
+    # ------------------------------------------------------------------
+
+    def _schedule_layout_save(self) -> None:
+        """
+        Coalesce saves.
+
+        A grid drag fires `change` continuously and every pane tab click is a
+        layout change too; without this, one drag would be a burst of BFF
+        writes for a value only the last of which matters.
+        """
+        if self._restoring:
+            return
+        if self._save_task is not None:
+            self._save_task.cancel()
+        self._save_task = asyncio.ensure_future(self._save_layout_soon())
+
+    async def _save_layout_soon(self) -> None:
+        try:
+            await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            return
+        self._save_task = None
+        try:
+            await LayoutService().save_async(
+                mode=self._mode, panes=self._collect_layout()
+            )
+        except Exception as error:  # a failed save must never break the UI
+            print(f"[layout] save failed: {error}", flush=True)
+
+    def _collect_layout(self) -> list:
+        panes = []
+        for pane_id, pane in self._panes.items():
+            geometry = dict(pane.get("geometry") or {})
+            item = js.document.querySelector(
+                f'#ix-grid-host .grid-stack-item[data-pane="{pane_id}"]'
+            )
+            # gridstackNode is where GridStack keeps the live position; the
+            # gs-* attributes lag behind a drag.
+            node = getattr(item, "gridstackNode", None) if item else None
+            if node:
+                geometry = {
+                    "x": int(node.x or 0),
+                    "y": int(node.y or 0),
+                    "w": int(node.w or 6),
+                    "h": int(node.h or 7),
+                }
+                pane["geometry"] = geometry
+
+            sftp = self._sftp_tabs.get(pane_id) or {}
+            panes.append(
+                {
+                    "session_id": pane["session_id"],
+                    "x": geometry.get("x", 0),
+                    "y": geometry.get("y", 0),
+                    "w": geometry.get("w", 6),
+                    "h": geometry.get("h", 7),
+                    "tab": pane["tab"],
+                    "path": sftp.get("path", ""),
+                }
+            )
+        return panes
+
+    async def _restore_layout(self) -> None:
+        result = await LayoutService().get_async()
+        if not result.get("ok"):
+            return
+        specs = result.get("panes") or []
+        if not specs:
+            return
+
+        self._restoring = True
+        try:
+            if result.get("mode") == "tiled":
+                await self._go_tiled()
+            for spec in specs:
+                self._open_pane(
+                    int(spec["session_id"]),
+                    focus=spec.get("tab", "terminal"),
+                    connect=False,
+                    restore=spec,
+                )
+        finally:
+            self._restoring = False
+
+        restored = len(self._panes)
+        if restored:
+            self._toast(
+                f"Restored {restored} connection(s). Click Reconnect to dial."
+            )
 
     def _sync_mode_buttons(self) -> None:
         for mode in ("tiled", "tabbed"):
@@ -960,6 +1161,7 @@ class IguanaXterm(MainWindow):
 
         entry["path"] = result["path"]
         entry["table"].set_rows(result["entries"])
+        self._schedule_layout_save()
         self._render_crumbs(tab_id, result["path"])
         self._show_picker_note(tab_id)
 
@@ -1813,6 +2015,15 @@ _GRID_CSS = """
   background:transparent;border:none;border-radius:4px;cursor:pointer;
   font-size:16px;line-height:1;}
 .grid-stack .ix-pane-close:hover{background:#7f1d1d;color:#fecaca;}
+.ix-reconnect{display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:6px;height:100%;padding:20px;text-align:center;}
+.ix-reconnect-icon{font-size:30px;color:#334155;}
+.ix-reconnect-name{color:#e2e8f0;font:600 14px system-ui,sans-serif;}
+.ix-reconnect-host{color:#64748b;font:11px ui-monospace,Menlo,Consolas,monospace;}
+.ix-reconnect-btn{display:inline-flex;align-items:center;gap:6px;margin-top:8px;
+  padding:7px 15px;color:#e2e8f0;background:#1e293b;border:1px solid #334155;
+  border-radius:7px;cursor:pointer;font:13px system-ui,sans-serif;}
+.ix-reconnect-btn:hover{background:#334155;border-color:#475569;}
 .ix-mode-switch{display:inline-flex;gap:2px;margin-right:10px;padding:2px;
   background:#0b1220;border:1px solid #1f2937;border-radius:7px;}
 .ix-mode-btn{display:inline-flex;align-items:center;justify-content:center;

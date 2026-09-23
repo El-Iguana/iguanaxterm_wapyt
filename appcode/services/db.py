@@ -167,6 +167,15 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+
+-- One workspace layout per user: which connections were open, where they sat
+-- in the grid, and which mode was in use. Opaque JSON rather than columns,
+-- because the shape belongs to the UI and will change with it.
+CREATE TABLE IF NOT EXISTS layouts (
+    user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    payload    TEXT    NOT NULL DEFAULT '',
+    updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 

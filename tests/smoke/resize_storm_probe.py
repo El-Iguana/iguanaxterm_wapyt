@@ -1,6 +1,11 @@
 """How many PTY resize messages does one drag actually send?"""
 from playwright.sync_api import sync_playwright
 
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from harness import reset_workspace  # noqa: E402
+
+
 APP = "http://127.0.0.1:8799/iguanaxterm"
 
 COUNTER = """
@@ -25,6 +30,7 @@ with sync_playwright() as p:
         pg.fill('input[name="email"]', "admin"); pg.fill('input[name="password"]', "testpass123")
         pg.click('input[type="submit"]')
     pg.wait_for_selector(".ix-toolbar", timeout=180000); pg.wait_for_timeout(500)
+    reset_workspace(pg)
     br = pg.locator(".wapyt-tree-row[data-branch='true']")
     if br.count(): br.first.click(); pg.wait_for_timeout(300)
     pg.locator(".wapyt-tree-row").last.dblclick()

@@ -213,6 +213,34 @@ decided 2026-09-23; not built yet.
   a Reconnect button. Auto-dialling N sessions on page load walks straight into
   the `MaxStartups` banner resets that `ssh.py`'s retry exists to survive.
 
+### Phase 4 is built (2026-09-23)
+
+The workspace layout persists per user: `layouts` table (one row, opaque JSON),
+`services/layout_service.py`, saves debounced 500ms through
+`_schedule_layout_save`. Mode, tile geometry, which tab each pane was on and
+the directory it was browsing all come back.
+
+**Restoring never dials.** Each restored pane renders a Reconnect placeholder
+and `_connect_pane` mounts the Terminal on click. Measured in
+`tests/smoke/layout_smoke.py` by counting WebSocket constructions: 0 terminal
+sockets on restore, exactly 1 after one Reconnect.
+
+Dead panes are filtered on **read**, not on write — a session deleted while the
+layout sat untouched still has to be dropped, and `get()` intersects the saved
+panes with the sessions you own.
+
+Traps:
+
+- **A default geometry stacks every new tile.** `{x:0, y:0, w:6, h:7}` looks
+  harmless, but naming a position tells GridStack exactly where to put it, so
+  the second tile lands *under* the first instead of beside it. A new pane
+  carries size only and gets `gs-auto-position`; only a restored pane names
+  `gs-x`/`gs-y`.
+- **Persistence broke every existing smoke test.** They assumed an empty
+  workspace and named `pane_1`. `tests/smoke/harness.py` now resets first — and
+  closing panes is not enough on its own, because the pane counter has already
+  advanced past the restored ones, so it reloads once the layout is empty.
+
 ### Phase 3 is built (2026-09-23)
 
 GridStack **14.0.0** is vendored at `appcode/vendor/gridstack/` and served from
@@ -335,9 +363,8 @@ tab inside the connection's own pane.
 - **Grid items need `min-height: 0`**, the same discipline as the layout cell
   fix above. Without it a terminal pushes its item wider instead of scrolling —
   the 81px-pane / 20-column bug again.
-- **Layout persistence** belongs in a per-user BFF service alongside the session
-  library; `GridStack.save()` returns a serialisable layout. Drop restored cells
-  whose session was deleted or belongs to someone else.
+- **Layout persistence is built** — see Phase 4 above. Geometry is read from
+  `item.gridstackNode`, not the `gs-*` attributes, which lag behind a drag.
 
 ## Live smoke test
 

@@ -21,6 +21,11 @@ original transfer suite went green while the feature was broken.
 """
 from playwright.sync_api import sync_playwright
 
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from harness import reset_workspace  # noqa: E402
+
+
 BASE = "http://127.0.0.1:8799"
 APP = f"{BASE}/iguanaxterm"
 
@@ -76,6 +81,7 @@ def main() -> int:
             page.wait_for_load_state("domcontentloaded")
 
         page.wait_for_selector(".ix-toolbar", timeout=180000)
+        reset_workspace(page)
         page.wait_for_selector(".wapyt-tree-row", timeout=30000)
         page.click(".wapyt-tree-row[data-branch='true']")
         page.wait_for_timeout(300)

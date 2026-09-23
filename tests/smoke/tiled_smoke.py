@@ -1,6 +1,11 @@
 """Phase 3: the tiled workspace, and switching between modes."""
 from playwright.sync_api import sync_playwright
 
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from harness import reset_workspace  # noqa: E402
+
+
 APP = "http://127.0.0.1:8799/iguanaxterm"
 results = []
 
@@ -30,6 +35,7 @@ with sync_playwright() as p:
         pg.fill('input[name="password"]', "testpass123")
         pg.click('input[type="submit"]')
     pg.wait_for_selector(".ix-toolbar", timeout=180000)
+    reset_workspace(pg)
     pg.wait_for_timeout(500)
     if pg.locator(".wapyt-tree-row").count() == 0:
         pg.click('.ix-toolbar-btn[data-action="new"]')

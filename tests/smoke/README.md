@@ -57,6 +57,30 @@ after a correct `release()`. The refcount is pinned by the unit tests in
 `tests/test_sftp_pool.py` instead, and the damage it prevents is an in-flight
 transfer dying, not a later listing.
 
+## Layout smoke
+
+`layout_smoke.py` covers persistence: mode, tile geometry, the tab each pane
+was on and the directory it was browsing all survive a reload, and restoring
+opens **zero** sockets — counted by wrapping `window.WebSocket`, not inferred.
+Clicking one Reconnect opens exactly one.
+
+```bash
+python3 tests/smoke/layout_smoke.py
+```
+
+## harness.py
+
+Shared `reset_workspace()` and `new_pane()`. Every script calls the reset right
+after login, because the layout persists and a run would otherwise inherit the
+last one's panes — which surfaces as a timeout on `pane_1` and looks nothing
+like the real cause. The reset also reloads the page once the layout is empty:
+closing panes alone leaves the pane counter past `pane_1`.
+
+Address tiles by `[data-pane="..."]`, never by DOM index — GridStack reorders
+the DOM by position, so `items[0]` is not the first pane opened. That one cost
+a round of confusion about swapped geometry that turned out to be the test's
+fault, not the app's.
+
 ## Tiled smoke
 
 `tiled_smoke.py` covers the tiled workspace: both panes get grid items, pane

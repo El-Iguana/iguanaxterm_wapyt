@@ -37,6 +37,15 @@ ordering, streaming, progress, the queue, the routes — and the stub returns a
 real `WritableStream`, since `response.body.pipeTo()` rejects anything else and
 the genuine `FileSystemWritableFileStream` is one.
 
+## Throttle probe
+
+`throttle_probe.py` measures how well the SSH connect retry absorbs a host that
+refuses connections, using `Containerfile.sshtarget-throttled` — the same image
+with `MaxStartups 1:100:2`, which reproduces the "Error reading SSH protocol
+banner" failure seen against a real host. It prints a table rather than
+passing or failing; run it before changing the retry ceiling in
+`services/ssh.py`. Its docstring carries the numbers measured so far.
+
 ## Notes
 
 - Alpine ships no `tput`; use `stty size` to read the remote PTY geometry.

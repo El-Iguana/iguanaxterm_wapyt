@@ -11,10 +11,15 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
+import socket
 import threading
+import time
 from typing import Optional
 
 import paramiko
+
+logger = logging.getLogger("iguanaxterm.ssh")
 
 # Ordered by how likely a modern key is to be one of these. DSSKey was dropped
 # in Paramiko 5, so it is resolved by name rather than imported — DSA keys are
@@ -141,24 +146,98 @@ def build_connect_kwargs(session: dict, timeout: int = 15) -> dict:
     return kwargs
 
 
-def connect(session: dict, timeout: int = 15, on_learn_host_key=None) -> paramiko.SSHClient:
+class SSHUnavailable(Exception):
+    """The host refused or dropped the connection, after retries."""
+
+
+def _is_transient(error: BaseException) -> bool:
+    """
+    True for the failures that mean "try again", not "this is misconfigured".
+
+    An SSH server under MaxStartups pressure, or behind a rate limiter, resets
+    the socket during the banner exchange. Paramiko surfaces that as a generic
+    SSHException whose message embeds the errno, so the text has to be matched.
+    Authentication and host-key failures are deliberately excluded — retrying
+    those just burns attempts against a limiter and can trip lockouts.
+    """
+    if isinstance(error, (ConnectionResetError, ConnectionRefusedError, EOFError)):
+        return True
+    if isinstance(error, (paramiko.AuthenticationException, HostKeyChanged)):
+        return False
+    if isinstance(error, paramiko.SSHException):
+        text = str(error).lower()
+        return any(
+            marker in text
+            for marker in ("banner", "reset by peer", "connection reset",
+                           "eof during negotiation", "timed out")
+        )
+    return isinstance(error, (socket.timeout, TimeoutError, OSError))
+
+
+def connect(
+    session: dict,
+    timeout: int = 15,
+    on_learn_host_key=None,
+    attempts: int = 3,
+) -> paramiko.SSHClient:
     """
     Open an authenticated SSH connection with host-key pinning and keepalive.
+
+    Retries transient failures. The app opens several connections to the same
+    host in quick succession — the interactive SFTP pool, the transfer pool,
+    one per terminal — and a server with a tight MaxStartups or a rate limiter
+    resets some of them during the banner exchange. That is exactly the case
+    where trying again works, so it is not worth surfacing to the user.
 
     Args:
         session: A decrypted profile from ``db.fetch_session``.
         timeout: Connect, banner and auth timeout in seconds.
         on_learn_host_key: Called with the serialized key the first time a host
             is seen, so the caller can persist the pin.
-    """
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(
-        PinnedHostKeyPolicy(session.get("host_key") or "", on_learn_host_key)
-    )
-    client.connect(**build_connect_kwargs(session, timeout=timeout))
+        attempts: Total tries, including the first.
 
-    transport = client.get_transport()
-    if transport is not None:
-        # 30s keepalive stops an idle NAT or firewall dropping the session.
-        transport.set_keepalive(30)
-    return client
+    Raises:
+        HostKeyChanged: the pinned key no longer matches. Never retried.
+        paramiko.AuthenticationException: bad credentials. Never retried.
+        SSHUnavailable: transient failures that did not clear.
+    """
+    last: Optional[BaseException] = None
+
+    for attempt in range(1, max(1, attempts) + 1):
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(
+            PinnedHostKeyPolicy(session.get("host_key") or "", on_learn_host_key)
+        )
+        try:
+            client.connect(**build_connect_kwargs(session, timeout=timeout))
+        except BaseException as error:
+            try:
+                client.close()
+            except Exception:
+                pass
+            if not _is_transient(error) or attempt >= attempts:
+                if _is_transient(error):
+                    raise SSHUnavailable(
+                        f"{session.get('host', 'host')} refused the connection "
+                        f"after {attempt} attempts. It may be rate-limiting or "
+                        f"at its connection limit — try again shortly."
+                    ) from error
+                raise
+            last = error
+            logger.info(
+                "transient SSH failure for %s (attempt %d/%d): %s",
+                session.get("host"), attempt, attempts, error,
+            )
+            # Back off so a retry does not itself add to the pressure.
+            time.sleep(0.6 * attempt)
+            continue
+
+        transport = client.get_transport()
+        if transport is not None:
+            # 30s keepalive stops an idle NAT or firewall dropping the session.
+            transport.set_keepalive(30)
+        if attempt > 1:
+            logger.info("connected to %s on attempt %d", session.get("host"), attempt)
+        return client
+
+    raise SSHUnavailable(str(last))

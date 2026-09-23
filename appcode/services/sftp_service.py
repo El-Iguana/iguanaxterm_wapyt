@@ -52,6 +52,16 @@ class SFTPPool:
         self._connections: dict[tuple[int, int], _PooledConnection] = {}
         self._keys: dict[int, tuple[int, int]] = {}
         self._guard = threading.Lock()
+        # One lock per session, held across the connect itself. Without it two
+        # concurrent acquires for the same session both miss the cache and both
+        # dial out; one connection is then overwritten in the dict and leaks,
+        # and the extra dial adds to exactly the connection pressure that makes
+        # a server reset the banner.
+        self._dialing: dict[tuple[int, int], threading.Lock] = {}
+
+    def _dial_lock(self, key: tuple[int, int]) -> threading.Lock:
+        with self._guard:
+            return self._dialing.setdefault(key, threading.Lock())
 
     def _evict_idle(self) -> None:
         cutoff = time.monotonic() - _IDLE_TIMEOUT_SECONDS
@@ -59,38 +69,54 @@ class SFTPPool:
         for key in stale:
             conn = self._connections.pop(key, None)
             self._keys.pop(key[1], None)
+            self._dialing.pop(key, None)
             if conn is not None:
                 try:
                     conn.client.close()
                 except Exception:
                     pass
 
-    def acquire(self, user_id: int, session_id: int, session: dict) -> _PooledConnection:
-        key = (user_id, session_id)
+    def _live(self, key: tuple[int, int]) -> Optional[_PooledConnection]:
+        """A pooled connection that is still up, or None after discarding it."""
         with self._guard:
             self._evict_idle()
             conn = self._connections.get(key)
-            if conn is not None:
-                transport = conn.client.get_transport()
-                # is_active() is a local flag check. The original issued a full
-                # listdir(".") round trip before *every* operation.
-                if transport is not None and transport.is_active():
-                    conn.last_used = time.monotonic()
-                    return conn
-                self._connections.pop(key, None)
-                try:
-                    conn.client.close()
-                except Exception:
-                    pass
+            if conn is None:
+                return None
+            transport = conn.client.get_transport()
+            # is_active() is a local flag check. The original issued a full
+            # listdir(".") round trip before *every* operation.
+            if transport is not None and transport.is_active():
+                conn.last_used = time.monotonic()
+                return conn
+            self._connections.pop(key, None)
+        try:
+            conn.client.close()
+        except Exception:
+            pass
+        return None
 
-        client = ssh_helpers.connect(
-            session, on_learn_host_key=_persist_host_key(session_id, user_id)
-        )
-        conn = _PooledConnection(client, client.open_sftp())
-        with self._guard:
-            self._connections[key] = conn
-            self._keys[session_id] = key
-        return conn
+    def acquire(self, user_id: int, session_id: int, session: dict) -> _PooledConnection:
+        key = (user_id, session_id)
+        conn = self._live(key)
+        if conn is not None:
+            return conn
+
+        # Serialise dialling per session. The check is repeated inside the lock
+        # because another caller may have connected while this one waited.
+        with self._dial_lock(key):
+            conn = self._live(key)
+            if conn is not None:
+                return conn
+
+            client = ssh_helpers.connect(
+                session, on_learn_host_key=_persist_host_key(session_id, user_id)
+            )
+            conn = _PooledConnection(client, client.open_sftp())
+            with self._guard:
+                self._connections[key] = conn
+                self._keys[session_id] = key
+            return conn
 
     def close(self, session_id: int) -> None:
         with self._guard:
@@ -212,6 +238,9 @@ class SFTPService:
         except ssh_helpers.HostKeyChanged as exc:
             return {"ok": False, "error": str(exc), "host_key_changed": True,
                     "entries": [], "path": path}
+        except ssh_helpers.SSHUnavailable as exc:
+            return {"ok": False, "error": str(exc), "retryable": True,
+                    "entries": [], "path": path}
         except Exception as exc:
             return {"ok": False, "error": str(exc), "entries": [], "path": path}
 
@@ -314,6 +343,9 @@ class SFTPService:
             return self._run(session_id, work)
         except ssh_helpers.HostKeyChanged as exc:
             return {"ok": False, "error": str(exc), "host_key_changed": True}
+        except ssh_helpers.SSHUnavailable as exc:
+            # Already phrased for a person; paramiko's own text is not.
+            return {"ok": False, "error": str(exc), "retryable": True}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 

@@ -19,6 +19,7 @@ from pytincture.dataclass import backend_for_frontend, bff_policy
 
 from services.auth import current_user_id
 from services.db import encrypt, get_db
+from services.paths import SESSION_TYPES
 
 # Columns that are safe to hand to the browser.
 _PUBLIC_COLUMNS = (
@@ -236,6 +237,6 @@ class SessionService:
                 raise ValueError
         except (TypeError, ValueError):
             errors["port"] = "Port must be between 1 and 65535"
-        if session_type not in ("ssh", "telnet"):
-            errors["session_type"] = "Type must be ssh or telnet"
+        if session_type not in SESSION_TYPES:
+            errors["session_type"] = "Type must be one of " + ", ".join(SESSION_TYPES)
         return errors

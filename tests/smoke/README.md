@@ -85,6 +85,25 @@ Clicking one Reconnect opens exactly one.
 python3 tests/smoke/layout_smoke.py
 ```
 
+## FTP smoke
+
+`ftp_smoke.py` covers the files-only connection types. `ftp_target.py` is a
+throwaway pyftpdlib server on `127.0.0.1:2121` that **requires** TLS on both
+channels, because the NAS that prompted the feature does
+(`504 TLS/SSL protection required`).
+
+```bash
+uv run --with pyftpdlib --with pyopenssl python tests/smoke/ftp_target.py /tmp/ixftp &
+python3 tests/smoke/ftp_smoke.py
+```
+
+It creates its own `ftps-box` profile in `Lab` through the editor, checking
+that FTP fills in port 21 and disables the key field. Then: the pane has no
+Terminal button and opens on Files, no `/ws/terminal/` socket is ever
+constructed (counted, as in the layout smoke), a download streams through
+`/files`, and a restored FTP pane's Reconnect lands back in the directory it
+was browsing.
+
 ## harness.py
 
 Shared `reset_workspace()` and `new_pane()`. Every script calls the reset right

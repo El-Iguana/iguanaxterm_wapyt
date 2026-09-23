@@ -28,6 +28,7 @@ from services import ssh as ssh_helpers
 from services import telnet as telnet_proto
 from services.auth import current_user_id
 from services.db import fetch_session, get_db
+from services.paths import session_caps
 
 logger = logging.getLogger("iguanaxterm.terminal")
 
@@ -94,6 +95,13 @@ async def terminal(websocket: WebSocket, session_id: int) -> None:
         return
 
     await websocket.accept()
+
+    if not session_caps(profile.get("type"))["terminal"]:
+        # A files-only profile (SFTP, FTP). The UI never opens a terminal for
+        # one; this is the copy that counts.
+        await _send(websocket, "error", "This connection has no terminal.")
+        await websocket.close()
+        return
 
     if profile.get("type") == "telnet":
         await _relay_telnet(websocket, profile)

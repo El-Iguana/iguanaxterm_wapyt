@@ -17,6 +17,7 @@ from typing import Any, Callable, Optional
 import paramiko
 from pytincture.dataclass import backend_for_frontend, bff_policy, bff_stream
 
+from services import ftp as ftp_helpers
 from services import ssh as ssh_helpers
 from services.auth import current_user_id
 from services.db import fetch_session, get_db
@@ -117,9 +118,7 @@ class SFTPPool:
             if conn is not None:
                 return conn
 
-            client = ssh_helpers.connect(
-                session, on_learn_host_key=_persist_host_key(session_id, user_id)
-            )
+            client = _dial(session, session_id, user_id)
             conn = _PooledConnection(client, client.open_sftp())
             with self._guard:
                 self._connections[key] = conn
@@ -191,6 +190,24 @@ class SFTPPool:
 
 
 sftp_pool = SFTPPool()
+
+
+def _dial(session: dict, session_id: int, user_id: int):
+    """
+    A connected client for the file browser, whatever the protocol.
+
+    An FTP connection answers the same calls as paramiko's (see ``ftp.py``),
+    so nothing past this point needs to know which one it got.
+    """
+    if session.get("type") == "ftp":
+        return ftp_helpers.connect(
+            session, on_learn_host_key=_persist_host_key(session_id, user_id)
+        )
+    if session.get("type") == "telnet":
+        raise PermissionError("Telnet sessions have no file browser")
+    return ssh_helpers.connect(
+        session, on_learn_host_key=_persist_host_key(session_id, user_id)
+    )
 
 
 def _persist_host_key(session_id: int, user_id: int) -> Callable[[str], None]:
@@ -288,7 +305,7 @@ class SFTPService:
         except ssh_helpers.HostKeyChanged as exc:
             return {"ok": False, "error": str(exc), "host_key_changed": True,
                     "entries": [], "path": path}
-        except ssh_helpers.SSHUnavailable as exc:
+        except (ssh_helpers.SSHUnavailable, ftp_helpers.FTPUnavailable) as exc:
             return {"ok": False, "error": str(exc), "retryable": True,
                     "entries": [], "path": path}
         except Exception as exc:
@@ -405,7 +422,7 @@ class SFTPService:
             return self._run(session_id, work)
         except ssh_helpers.HostKeyChanged as exc:
             return {"ok": False, "error": str(exc), "host_key_changed": True}
-        except ssh_helpers.SSHUnavailable as exc:
+        except (ssh_helpers.SSHUnavailable, ftp_helpers.FTPUnavailable) as exc:
             # Already phrased for a person; paramiko's own text is not.
             return {"ok": False, "error": str(exc), "retryable": True}
         except Exception as exc:

@@ -52,7 +52,14 @@ from wapyt import (
 )
 
 from services.layout_service import LayoutService
-from services.paths import breadcrumbs, format_size, parent_path, session_icon
+from services.paths import (
+    SESSION_TYPES,
+    breadcrumbs,
+    format_size,
+    parent_path,
+    session_caps,
+    session_icon,
+)
 from services.session_service import SessionService
 from services.sftp_service import SFTPService
 from services.user_service import UserService
@@ -198,7 +205,7 @@ class IguanaXterm(MainWindow):
             '         alt="" width="40" height="40" decoding="async">'
             '    <div class="ix-brand-text">'
             '      <span class="ix-brand-name">IguanaXterm</span>'
-            '      <span class="ix-brand-sub">SSH &middot; Telnet &middot; SFTP</span>'
+            '      <span class="ix-brand-sub">SSH &middot; Telnet &middot; SFTP &middot; FTP</span>'
             '    </div>'
             '  </div>'
             '  <div class="ix-sidebar-tree" id="ix-tree-host"></div>'
@@ -515,10 +522,12 @@ class IguanaXterm(MainWindow):
         if session is None:
             return None
 
-        is_telnet = session.get("type") == "telnet"
-        if focus == "files" and is_telnet:
-            self._toast("SFTP needs an SSH session.")
+        caps = session_caps(session.get("type"))
+        if focus == "files" and not caps["files"]:
+            self._toast("This connection has no file browser.")
             focus = "terminal"
+        if focus == "terminal" and not caps["terminal"]:
+            focus = "files"  # SFTP and FTP profiles are files only
 
         self._tab_counter += 1
         pane_id = f"pane_{self._tab_counter}"
@@ -533,14 +542,16 @@ class IguanaXterm(MainWindow):
 
         cell = self.tabs.get_cell(pane_id)
         container = cell.getContainer() if hasattr(cell, "getContainer") else cell
-        container.innerHTML = self._pane_html(pane_id, session, is_telnet)
+        container.innerHTML = self._pane_html(pane_id, session, caps)
 
         self._panes[pane_id] = {
             "session_id": session_id,
             "name": session["name"],
             "terminal": None,
-            "telnet": is_telnet,
-            "tab": "terminal",
+            "has_terminal": caps["terminal"],
+            "has_files": caps["files"],
+            # Set for real by _pane_select once the pane is dialled.
+            "tab": "terminal" if caps["terminal"] else "files",
             "files_mounted": False,
             # A brand-new pane carries a size but no position, so GridStack
             # auto-places it. Giving it x=0,y=0 -- which a default geometry
@@ -566,7 +577,7 @@ class IguanaXterm(MainWindow):
 
         if connect:
             self._connect_pane(pane_id)
-            if focus == "files":
+            if focus == "files" and caps["terminal"]:
                 self._pane_select(pane_id, "files")
         else:
             self._show_reconnect(pane_id, session)
@@ -585,6 +596,15 @@ class IguanaXterm(MainWindow):
             return
         host.innerHTML = ""
 
+        if not pane["has_terminal"]:
+            # A files-only pane "dials" by opening its file browser. The
+            # terminal panel only ever held the Reconnect placeholder.
+            restore = pane.pop("restore", None)
+            if restore:
+                pane["restore_path"] = restore.get("path") or ""
+            self._pane_select(pane_id, "files")
+            return
+
         terminal = Terminal(
             TerminalConfig(
                 ws_url=f"/ws/terminal/{pane['session_id']}",
@@ -602,7 +622,7 @@ class IguanaXterm(MainWindow):
         pane["terminal"] = terminal
 
         restore = pane.pop("restore", None)
-        if restore and restore.get("tab") == "files" and not pane["telnet"]:
+        if restore and restore.get("tab") == "files" and pane["has_files"]:
             pane["restore_path"] = restore.get("path") or ""
             self._pane_select(pane_id, "files")
         else:
@@ -631,7 +651,7 @@ class IguanaXterm(MainWindow):
             f"</div>"
         )
 
-    def _pane_html(self, pane_id: str, session: dict, is_telnet: bool) -> str:
+    def _pane_html(self, pane_id: str, session: dict, caps: dict) -> str:
         """
         A pane's own chrome: a two-entry tab strip over two stacked panels.
 
@@ -645,16 +665,23 @@ class IguanaXterm(MainWindow):
         port = session.get("port")
         user = session.get("username") or ""
         label = f"{user}@{host}" if user else host
-        if port and int(port) not in (22, 23):
+        if port and int(port) != caps["port"]:
             label = f"{label}:{port}"
+        if not caps["terminal"]:
+            label = f"{session.get('type', '').upper()} {label}"
 
-        files_attrs = ' disabled title="SFTP needs an SSH session."' if is_telnet else ""
+        files_attrs = (
+            "" if caps["files"] else ' disabled title="This connection has no file browser."'
+        )
+        # A files-only pane keeps the Terminal panel (the Reconnect placeholder
+        # lives there) but not a button that could switch to it.
+        term_attrs = "" if caps["terminal"] else " hidden"
         return (
             f'<div class="ix-pane" data-pane="{pane_id}">'
             f'  <div class="ix-pane-tabs">'
             f'    <span class="ix-pane-grip mdi mdi-drag-vertical" title="Drag to move"></span>'
             f'    <button type="button" class="ix-pane-tab" data-pane-tab="terminal"'
-            f'            data-pane="{pane_id}" aria-selected="true">'
+            f'            data-pane="{pane_id}" aria-selected="true"{term_attrs}>'
             f'      <span class="mdi mdi-console-line"></span><span>Terminal</span></button>'
             f'    <button type="button" class="ix-pane-tab" data-pane-tab="files"'
             f'            data-pane="{pane_id}" aria-selected="false"{files_attrs}>'
@@ -678,8 +705,10 @@ class IguanaXterm(MainWindow):
         pane = self._panes.get(pane_id)
         if pane is None or which not in ("terminal", "files"):
             return
-        if which == "files" and pane["telnet"]:
-            self._toast("SFTP needs an SSH session.")
+        if which == "files" and not pane["has_files"]:
+            self._toast("This connection has no file browser.")
+            return
+        if which == "terminal" and not pane["has_terminal"]:
             return
 
         pane["tab"] = which
@@ -1132,8 +1161,8 @@ class IguanaXterm(MainWindow):
         session = self._session(session_id)
         if session is None:
             return
-        if session.get("type") == "telnet":
-            self._toast("SFTP needs an SSH session.")
+        if not session_caps(session.get("type"))["files"]:
+            self._toast("This connection has no file browser.")
             return
 
         existing = next(
@@ -1739,8 +1768,8 @@ class IguanaXterm(MainWindow):
                                 placeholder="Ungrouped"),
                     FieldConfig(id="session_type", label="Type", type="select",
                                 value=existing.get("type", "ssh"),
-                                options=[SelectOption("ssh", "SSH"),
-                                         SelectOption("telnet", "Telnet")]),
+                                options=[SelectOption(key, caps["label"])
+                                         for key, caps in SESSION_TYPES.items()]),
                     FieldConfig(id="host", label="Host", required=True,
                                 value=existing.get("host", "")),
                     FieldConfig(id="port", label="Port", type="number",
@@ -1771,11 +1800,13 @@ class IguanaXterm(MainWindow):
         def _on_type_change(payload: dict) -> None:
             if payload.get("id") != "session_type":
                 return
-            # Telnet's default port is 23, and it has no key or user auth.
-            is_telnet = payload.get("value") == "telnet"
-            form.set_values({"port": 23 if is_telnet else 22})
-            for field in ("password", "private_key", "username"):
-                form.set_field_disabled(field, is_telnet)
+            # Each type has its own default port. Telnet has no user or key
+            # auth, and FTP has a user and password but no key.
+            session_type = payload.get("value") or "ssh"
+            form.set_values({"port": session_caps(session_type)["port"]})
+            for field in ("password", "username"):
+                form.set_field_disabled(field, session_type == "telnet")
+            form.set_field_disabled("private_key", session_type in ("telnet", "ftp"))
 
         form.on_change(_on_type_change)
         form.on_cancel(lambda _payload: modal.hide())
@@ -2154,7 +2185,7 @@ _PANE_CSS = """
    terminal's host element is created once and never replaced. */
 .ix-pane-body{position:relative;flex:1 1 auto;min-height:0;}
 .ix-pane-panel{position:absolute;inset:0;min-width:0;min-height:0;}
-.ix-pane-panel[hidden]{display:none;}
+.ix-pane-panel[hidden],.ix-pane-tab[hidden]{display:none;}
 /* A narrow pane drops the tab labels to icons. */
 @container (max-width: 420px){
   .ix-pane-tab span:not(.mdi){display:none;}

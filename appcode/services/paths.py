@@ -132,9 +132,29 @@ def file_icon(name: str, is_dir: bool = False, is_link: bool = False) -> str:
     return _ICON_BY_EXTENSION.get(extension, "mdi-file-outline")
 
 
+# What each connection type can do. Imported by the browser (which tabs a pane
+# gets, the editor's default port) and by the server (validation, which
+# protocol the file pool dials), so the two can never disagree.
+SESSION_TYPES = {
+    "ssh": {"label": "SSH", "port": 22, "terminal": True, "files": True},
+    "telnet": {"label": "Telnet", "port": 23, "terminal": True, "files": False},
+    "sftp": {"label": "SFTP (files only)", "port": 22, "terminal": False, "files": True},
+    "ftp": {"label": "FTP (files only)", "port": 21, "terminal": False, "files": True},
+}
+
+
+def session_caps(session_type: str | None) -> dict:
+    """The capability row for a type; an unknown type is treated as SSH."""
+    return SESSION_TYPES.get(session_type or "ssh", SESSION_TYPES["ssh"])
+
+
 def session_icon(session_type: str) -> str:
     """MDI class for a saved connection profile."""
-    return "mdi-console-network" if session_type == "telnet" else "mdi-server"
+    return {
+        "telnet": "mdi-console-network",
+        "sftp": "mdi-folder-key-network",
+        "ftp": "mdi-folder-network-outline",
+    }.get(session_type, "mdi-server")
 
 
 # ── Client-side filtering ─────────────────────────────────────────────────────

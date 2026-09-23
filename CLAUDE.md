@@ -1,6 +1,6 @@
 # IguanaXterm — pytincture + wapyt rewrite
 
-Browser-based SSH/Telnet terminal manager with SFTP. A rewrite of
+Browser-based SSH/Telnet terminal manager with SFTP and FTP(S) file browsing. A rewrite of
 `~/Development/workspace/iguanaxterm` (FastAPI + 1350 lines of vanilla JS) onto
 **pytincture** (Python in the browser via Pyodide) and **wapyt** (the
 DHTMLX-free widgetset at `../wa_pytincture_widgetset`).
@@ -31,8 +31,9 @@ appcode/                # pytincture modules_path
     auth.py             #   authenticator + BFF policy hook
     db.py               #   SQLite, Fernet, bcrypt, session secret
     ssh.py              #   key loading + host-key pinning
+    ftp.py              #   FTP/FTPS as a paramiko-shaped client (see below)
     telnet.py           #   IAC parser (pure, unit-tested)
-    paths.py            #   path/format helpers — imported by BOTH sides
+    paths.py            #   path/format helpers + SESSION_TYPES — BOTH sides
     session_service.py  #   BFF: connection profiles
     user_service.py     #   BFF: accounts
     sftp_service.py     #   BFF: directory ops + the connection pool
@@ -194,11 +195,60 @@ panel measures 0×0 and fitting against that produces a 1×1 terminal that never
 recovers. `Terminal.fit()` skips while hidden and a `ResizeObserver` re-fits on
 the way back; `_on_tab_change` also calls `fit()` explicitly.
 
-## Planned: GridStack tiling
+## Connection types (2026-09-23)
+
+`SESSION_TYPES` in `services/paths.py` is the one table of what a type can do —
+`terminal`, `files`, default `port` — read by the editor, the pane, the
+session validator, the terminal relay and the pool's dialler.
+
+| type | terminal | files | dialled with |
+|---|---|---|---|
+| `ssh` | yes | SFTP | paramiko |
+| `telnet` | yes | no | asyncio |
+| `sftp` | no | SFTP | paramiko |
+| `ftp` | no | FTP/FTPS | `services/ftp.py` |
+
+A files-only pane has no Terminal button and opens on Files. It keeps its
+terminal *panel*, because the Reconnect placeholder lives there; `_connect_pane`
+then clears it and selects Files instead of mounting a Terminal. The relay
+refuses a files-only profile server-side too.
+
+### FTP pretends to be paramiko
+
+`FTPFiles` answers the exact slice of `SFTPClient` the app calls, plus the
+pool's `get_transport().is_active()` and `open_sftp()`, so `SFTPService`,
+`SFTPPool` and `transfer.py` are protocol-blind. `sftp_service._dial` is the
+only branch. Things that shaped it:
+
+- **The NAS requires TLS.** `192.168.1.219:21` (SmbFTPD) answers a plain
+  login with `504 TLS/SSL protection required`. So `ftp` always tries
+  `AUTH TLS` and falls back to plain only for a server that refuses it.
+- **The certificate is pinned in `host_key`** as `tls-sha256 <hex>` — NAS
+  certs are self-signed, so there is no CA to trust. The pin is checked before
+  the password goes out. A pinned server that stops offering TLS is a
+  *downgrade* and raises `HostKeyChanged`, same as a changed cert. "Forget
+  host key" resets it, like SSH.
+- **Data connections reuse the TLS session** (`_FTPS.ntransfercmd`). ftplib
+  does not, and vsftpd/FileZilla refuse a data channel without it.
+- **One control connection, one thing at a time.** `_busy` is held by every
+  command and by an open transfer handle until `close()`. An abandoned handle
+  releases it from `__del__`; waiters time out at 120s rather than hang.
+- **Idle servers hang up with 421.** `_call` reconnects once and retries.
+  Connection loss is matched as `EOFError`/`ConnectionError`/`TimeoutError`,
+  never bare `OSError` — `FileNotFoundError` is an OSError too, and it is an
+  answer, not a dropped line.
+- **`listdir_attr` CWDs in first.** LIST of a *file* succeeds on many servers
+  and lists the file, which would send `_remove_recursive` hunting for its
+  children. CWD makes "not a directory" an IOError everywhere.
+- **Tested live** in `tests/test_ftp.py` against in-process pyftpdlib, plain
+  and TLS-required (dev deps `pyftpdlib`, `pyopenssl`), and in the browser by
+  `tests/smoke/ftp_smoke.py`.
+
+## GridStack tiling (built)
 
 Tiled workspace where each cell is one connection carrying its own Terminal and
-Files tabs, [GridStack](https://gridstackjs.com) doing the tiling. Design
-decided 2026-09-23; not built yet.
+Files tabs, [GridStack](https://gridstackjs.com) doing the tiling. Designed and
+built 2026-09-23; phases below.
 
 ### Decisions
 

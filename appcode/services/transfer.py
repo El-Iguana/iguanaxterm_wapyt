@@ -26,6 +26,7 @@ from fastapi.responses import StreamingResponse
 from services.auth import current_user_id
 from services.db import fetch_session
 from services.paths import is_safe_name
+from services import ftp as ftp_helpers
 from services import ssh as ssh_helpers
 from services.sftp_service import SFTPPool
 
@@ -105,7 +106,7 @@ async def download(request: Request, session_id: int, path: str) -> StreamingRes
         conn, handle, size = await loop.run_in_executor(None, _open)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="File not found")
-    except ssh_helpers.SSHUnavailable as exc:
+    except (ssh_helpers.SSHUnavailable, ftp_helpers.FTPUnavailable) as exc:
         # 503, not 400: the request was fine, the host was not.
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
@@ -176,7 +177,7 @@ async def upload(
         conn = await loop.run_in_executor(
             None, lambda: transfer_pool.acquire(user_id, int(session_id), profile)
         )
-    except ssh_helpers.SSHUnavailable as exc:
+    except (ssh_helpers.SSHUnavailable, ftp_helpers.FTPUnavailable) as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
     def _prepare():

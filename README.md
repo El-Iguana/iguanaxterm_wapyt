@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-2.0.0-green.svg)]()
 
-A browser-based SSH/Telnet terminal manager with SFTP. Manage all your remote
+A browser-based SSH/Telnet terminal manager with SFTP and FTP file browsing. Manage all your remote
 connections from a single web UI — no client software required. Tile them side
 by side, or keep them in tabs; either way the workspace is there when you come
 back.
@@ -50,6 +50,10 @@ dialling every saved session at once on page load is how you trip a server's
 ### Connections
 
 - **SSH & Telnet** — connect to any host directly in the browser
+- **SFTP and FTP profiles** — files-only connections for hosts that have no
+  shell to offer, like a NAS. FTP upgrades to TLS (`AUTH TLS`) whenever the
+  server supports it, and pins the certificate on first use the same way an
+  SSH host key is pinned
 - **Session library** — saved connections organised into folders, with a filter
 - **Terminal search** — Ctrl+F over the scrollback
 - **Auto-reconnect** — exponential backoff, up to 5 attempts
@@ -62,7 +66,8 @@ dialling every saved session at once on page load is how you trip a server's
 
 ### Files
 
-- **SFTP per pane** — browse, filter, rename, delete, make folders
+- **A file browser per pane** — browse, filter, rename, delete, make folders,
+  over SFTP or FTP/FTPS alike
 - **Download where you want it** — a folder picker and a filename prompt before
   the transfer, not a dump into `~/Downloads` (Chrome and Edge; elsewhere the
   panel says so up front)
@@ -88,6 +93,7 @@ dialling every saved session at once on page load is how you trip a server's
 | UI | Python in the browser (Pyodide) + wapyt widgets |
 | Backend | pytincture (FastAPI) + Uvicorn |
 | SSH/SFTP | Paramiko |
+| FTP/FTPS | ftplib, behind a paramiko-shaped adapter |
 | Telnet | asyncio + an RFC 854/1073 IAC parser |
 | Auth | pytincture sessions + bcrypt |
 | Terminal | xterm.js 5.5, vendored and served same-origin |
@@ -325,6 +331,7 @@ resize path and the SFTP pool — everything else is unit-level. See
 | `narrow_pane_smoke.py` | the SFTP panel from 1200px down to 320px |
 | `tiled_smoke.py` | the grid, and switching layout modes |
 | `layout_smoke.py` | persistence, and that a restore dials nothing |
+| `ftp_smoke.py` | files-only FTP panes over TLS, against `ftp_target.py` |
 | `maximize_smoke.py` | zooming a tile, and that the grid model is untouched |
 | `reparent_spike.py` | that a live terminal survives being moved |
 | `resize_storm_probe.py` | PTY resize traffic during a drag (a measurement) |

@@ -220,7 +220,7 @@ pool's `get_transport().is_active()` and `open_sftp()`, so `SFTPService`,
 `SFTPPool` and `transfer.py` are protocol-blind. `sftp_service._dial` is the
 only branch. Things that shaped it:
 
-- **The NAS requires TLS.** `192.168.1.219:21` (SmbFTPD) answers a plain
+- **The NAS requires TLS.** The home NAS (SmbFTPD, port 21) answers a plain
   login with `504 TLS/SSL protection required`. So `ftp` always tries
   `AUTH TLS` and falls back to plain only for a server that refuses it.
 - **The certificate is pinned in `host_key`** as `tls-sha256 <hex>` — NAS

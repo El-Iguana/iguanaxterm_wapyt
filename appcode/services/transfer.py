@@ -18,10 +18,13 @@ from __future__ import annotations
 import asyncio
 import hmac
 import posixpath
+import time
 from typing import Iterator, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from python_multipart.multipart import MultipartParser, parse_options_header
+from starlette.requests import ClientDisconnect
 
 from services.auth import current_user_id
 from services.db import fetch_session
@@ -127,6 +130,7 @@ async def download(request: Request, session_id: int, path: str) -> StreamingRes
                 handle.close()
             except Exception:
                 pass
+            conn.last_used = time.monotonic()
 
     filename = posixpath.basename(path) or "download"
     headers = {
@@ -143,34 +147,107 @@ async def download(request: Request, session_id: int, path: str) -> StreamingRes
     )
 
 
+# Non-file form fields are a path and a relative path; anything bigger is not
+# ours. Bounds what one part can make the server hold before the file arrives.
+_MAX_FIELD_BYTES = 16 * 1024
+
+
+class _UploadParts:
+    """
+    Callbacks for python-multipart's push parser.
+
+    Collects the small text fields, and queues the file part's bytes for the
+    route to drain after each ``write()``. The queue never holds more than one
+    network read's worth, so memory does not grow with the file.
+    """
+
+    def __init__(self) -> None:
+        self.fields: dict[str, str] = {}
+        self.filename: Optional[str] = None
+        self.file_started = False
+        self.file_ended = False
+        self.pending: list[bytes] = []
+        self._headers: dict[bytes, bytes] = {}
+        self._field = b""
+        self._value = b""
+        self._name = ""
+        self._buffer = bytearray()
+
+    def callbacks(self) -> dict:
+        return {
+            "on_part_begin": self._part_begin,
+            "on_header_field": self._header_field,
+            "on_header_value": self._header_value,
+            "on_header_end": self._header_end,
+            "on_headers_finished": self._headers_finished,
+            "on_part_data": self._part_data,
+            "on_part_end": self._part_end,
+        }
+
+    def _part_begin(self) -> None:
+        self._headers = {}
+        self._name = ""
+        self._buffer = bytearray()
+
+    def _header_field(self, data: bytes, start: int, end: int) -> None:
+        self._field += data[start:end]
+
+    def _header_value(self, data: bytes, start: int, end: int) -> None:
+        self._value += data[start:end]
+
+    def _header_end(self) -> None:
+        self._headers[self._field.lower()] = self._value
+        self._field = self._value = b""
+
+    def _headers_finished(self) -> None:
+        _, options = parse_options_header(self._headers.get(b"content-disposition", b""))
+        self._name = options.get(b"name", b"").decode("utf-8", "replace")
+        if self._name == "file":
+            self.filename = options.get(b"filename", b"").decode("utf-8", "replace")
+            self.file_started = True
+
+    def _part_data(self, data: bytes, start: int, end: int) -> None:
+        if self._name == "file":
+            self.pending.append(bytes(data[start:end]))
+            return
+        self._buffer += data[start:end]
+        if len(self._buffer) > _MAX_FIELD_BYTES:
+            raise HTTPException(status_code=400, detail="Form field too large")
+
+    def _part_end(self) -> None:
+        if self._name == "file":
+            self.file_ended = True
+        elif self._name:
+            self.fields[self._name] = self._buffer.decode("utf-8", "replace")
+
+
 @router.post("/{session_id}/upload")
-async def upload(
-    request: Request,
-    session_id: int,
-    path: str = Form(...),
-    file: UploadFile = File(...),
-    relative_path: Optional[str] = Form(None),
-) -> dict:
+async def upload(request: Request, session_id: int) -> dict:
     """
     Stream one uploaded file to the remote directory.
 
-    ``relative_path`` carries a folder-relative position for a directory
-    upload, and the intervening directories are created as needed.
+    The multipart body is parsed *here*, as it arrives, rather than by
+    FastAPI's ``Form``/``File`` parameters. Those parse the whole body before
+    the handler runs: the file is spooled to local disk first, and it happens
+    before the CSRF and ownership checks below, so anyone could make the
+    server buffer an arbitrarily large body. Now nothing is read until the
+    caller is known, and the bytes go straight to the remote.
+
+    This route is the one path exempt from the app-wide 2 MiB body limit (see
+    ``service.py``); ``GANXTERM_MAX_UPLOAD_BYTES`` caps it instead.
+
+    The form carries ``path`` and optionally ``relative_path`` (a
+    folder-relative position for a directory upload, whose intervening
+    directories are created as needed), then ``file``. wapyt sends the fields
+    first, so the destination is known by the time the file's bytes arrive.
     """
     _require_csrf(request)
     user_id, profile = _require_profile(request, session_id)
 
-    base = (path or "/").rstrip("/") or "/"
-    if relative_path:
-        safe = _safe_relative(relative_path)
-        remote_path = posixpath.join(base, safe)
-        parent = posixpath.dirname(remote_path)
-    else:
-        name = posixpath.basename(file.filename or "")
-        if not is_safe_name(name):
-            raise HTTPException(status_code=400, detail="Invalid filename")
-        remote_path = posixpath.join(base, name)
-        parent = base
+    content_type, options = parse_options_header(request.headers.get("content-type"))
+    boundary = options.get(b"boundary")
+    if content_type != b"multipart/form-data" or not boundary:
+        raise HTTPException(status_code=400, detail="Expected multipart/form-data")
 
     loop = asyncio.get_running_loop()
     try:
@@ -179,33 +256,83 @@ async def upload(
         )
     except (ssh_helpers.SSHUnavailable, ftp_helpers.FTPUnavailable) as exc:
         raise HTTPException(status_code=503, detail=str(exc))
+    except ssh_helpers.HostKeyChanged as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
-    def _prepare():
+    parts = _UploadParts()
+    parser = MultipartParser(boundary, parts.callbacks())
+    handle = None
+    remote_path = ""
+    written = 0
+    finished = False
+
+    def _destination() -> tuple[str, str, str]:
+        base = (parts.fields.get("path") or "/").rstrip("/") or "/"
+        relative = parts.fields.get("relative_path")
+        if relative:
+            remote = posixpath.join(base, _safe_relative(relative))
+            return base, remote, posixpath.dirname(remote)
+        name = posixpath.basename(parts.filename or "")
+        if not is_safe_name(name):
+            raise HTTPException(status_code=400, detail="Invalid filename")
+        return base, posixpath.join(base, name), base
+
+    def _prepare(base: str, remote: str, parent: str):
         if parent != base:
             _mkdir_p(conn.sftp, parent)
-        handle = conn.sftp.open(remote_path, "wb")
-        handle.set_pipelined(True)
-        return handle
+        opened = conn.sftp.open(remote, "wb")
+        opened.set_pipelined(True)
+        return opened
 
-    written = 0
-    # Read from the client on the event loop, write to SFTP on a worker —
-    # never the whole file in memory, unlike the original's `await file.read()`.
-    with conn.lock:
-        try:
-            handle = await loop.run_in_executor(None, _prepare)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        try:
-            while True:
-                chunk = await file.read(_CHUNK)
-                if not chunk:
-                    break
-                await loop.run_in_executor(None, handle.write, chunk)
-                written += len(chunk)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        finally:
-            await loop.run_in_executor(None, handle.close)
+    # The pooled channel is single-threaded. Waiting for it on a worker keeps
+    # the event loop free: a plain `with conn.lock:` here would stall every
+    # other request for as long as a download on this session holds it.
+    await loop.run_in_executor(None, conn.lock.acquire)
+    try:
+        async for chunk in request.stream():
+            parser.write(chunk)
+            if parts.file_started and handle is None:
+                base, remote_path, parent = _destination()
+                try:
+                    handle = await loop.run_in_executor(None, _prepare, base, remote_path, parent)
+                except Exception as exc:
+                    raise HTTPException(status_code=400, detail=str(exc))
+            if parts.pending:
+                data = b"".join(parts.pending)
+                parts.pending.clear()
+                await loop.run_in_executor(None, handle.write, data)
+                written += len(data)
+                conn.last_used = time.monotonic()
+        parser.finalize()
+
+        if handle is None or not parts.file_ended:
+            raise HTTPException(status_code=400, detail="No file in the upload")
+        await loop.run_in_executor(None, handle.close)
+        finished = True
+    except HTTPException:
+        raise
+    except ClientDisconnect:
+        # Cancelled in the queue, or the tab went away.
+        raise HTTPException(status_code=499, detail="Upload cancelled")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        if handle is not None and not finished:
+            # A half-written file under the real name looks like a good copy.
+            # Take it away; the queue shows the upload as failed.
+            def _discard() -> None:
+                try:
+                    handle.close()
+                except Exception:
+                    pass
+                try:
+                    conn.sftp.remove(remote_path)
+                except Exception:
+                    pass
+
+            await loop.run_in_executor(None, _discard)
+        conn.last_used = time.monotonic()
+        conn.lock.release()
 
     return {"ok": True, "path": remote_path, "bytes": written}
 

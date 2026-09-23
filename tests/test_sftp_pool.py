@@ -122,3 +122,26 @@ def test_idle_eviction_clears_a_stale_hold(pool):
     assert key not in pool._connections
     assert pool._refs.get(key) is None, "stale hold would pin the next channel open"
     assert client.closed == 1
+
+
+def test_idle_eviction_spares_a_channel_mid_transfer(pool):
+    """
+    last_used is stamped when a transfer starts, so a long one looks idle.
+    Evicting it would cut a large upload off partway through.
+    """
+    from services import sftp_service
+
+    client, key = _seed(pool)
+    conn = pool._connections[key]
+    conn.last_used = time.monotonic() - sftp_service._IDLE_TIMEOUT_SECONDS - 60
+
+    conn.lock.acquire()
+    try:
+        pool._evict_idle()
+        assert key in pool._connections, "evicted a channel with a transfer running"
+        assert client.closed == 0
+    finally:
+        conn.lock.release()
+
+    pool._evict_idle()
+    assert key not in pool._connections, "an idle, unlocked channel should still go"

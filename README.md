@@ -249,6 +249,13 @@ proxy headers, so it must sit behind a TLS-terminating reverse proxy (nginx,
 Caddy, Traefik). It does not terminate TLS itself, and the proxy must forward
 `X-Forwarded-Proto`.
 
+**Let large uploads through the proxy.** Uploads stream straight through to
+the remote host, so there is no size limit in the app beyond
+`GANXTERM_MAX_UPLOAD_BYTES`, but proxies have their own: nginx refuses any
+body over **1 MB** by default, which fails every photo. Set
+`client_max_body_size 0;` (or a real cap) and `proxy_request_buffering off;` on
+this site, and raise `proxy_read_timeout` for slow links.
+
 This is also what makes "choose where to save" work: the File System Access API
 needs a secure context, so downloads can only offer a destination picker over
 https or on loopback.
@@ -277,6 +284,7 @@ unrecoverable.
 | `GANXTERM_SESSION_SECRET` | *(generated)* | Cookie-signing secret |
 | `GANXTERM_CANONICAL_ORIGIN` | `http://127.0.0.1:$PORT` | Public origin. An `https://` value switches on production mode |
 | `GANXTERM_ALLOWED_HOSTS` | `127.0.0.1` | Comma-separated hostnames (no ports); the canonical origin's host is always added |
+| `GANXTERM_MAX_UPLOAD_BYTES` | `68719476736` (64 GiB) | Largest single upload. Every other request stays capped at 2 MiB |
 | `PORT` | `8765` | Listen port |
 
 ## Data persistence
@@ -326,6 +334,7 @@ resize path and the SFTP pool — everything else is unit-level. See
 |---|---|
 | `live_ssh_smoke.py` | terminal, PTY sizing, search, SFTP browsing |
 | `transfer_smoke.py` | download, folder download, upload, the queue |
+| `large_upload_smoke.py` | 40 MB over SFTP and FTPS, folder uploads, cancel, the 2 MiB cap elsewhere |
 | `upload_race_smoke.py` | the file-picker activation race |
 | `pane_smoke.py` | panes, lazy file mounting, independent shells |
 | `narrow_pane_smoke.py` | the SFTP panel from 1200px down to 320px |

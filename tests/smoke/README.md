@@ -104,6 +104,18 @@ constructed (counted, as in the layout smoke), a download streams through
 `/files`, and a restored FTP pane's Reconnect lands back in the directory it
 was browsing.
 
+## Large upload smoke
+
+`large_upload_smoke.py` pushes 40 MB through the upload route to both the SSH
+target and `ftp_target.py`, downloads it back and compares SHA-256 in the page.
+It also sends a 5 MB file into `Amber/2026/` with a `relative_path`, which is a
+folder upload, and aborts a 60 MB upload partway. The FTP target's log shows
+the partial `STOR` followed by a `DELE`, so the cleanup is proven to have run,
+not just a missing file. Finally it checks that the 2 MiB limit still applies
+to a BFF call, and that an upload without the CSRF header gets 403.
+
+Both targets must be up, as for the transfer and FTP smokes.
+
 ## harness.py
 
 Shared `reset_workspace()` and `new_pane()`. Every script calls the reset right

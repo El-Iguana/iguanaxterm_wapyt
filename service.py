@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -50,6 +51,7 @@ def load_dotenv_file() -> None:
 load_dotenv_file()
 
 from pytincture import PytinctureConfig, create_app  # noqa: E402
+from pytincture.backend.middleware import RequestBodyLimitMiddleware  # noqa: E402
 
 from services.db import init_db, session_secret  # noqa: E402
 from services.login_page import LoginPageMiddleware, check_at_startup  # noqa: E402
@@ -126,6 +128,46 @@ def is_loopback_deployment(origin: str) -> bool:
         return False
 
 
+# pytincture's own cap on every request body. Kept for everything but uploads.
+_DEFAULT_BODY_LIMIT = 2 * 1024 * 1024
+
+_UPLOAD_PATH = re.compile(r"/files/\d+/upload")
+
+
+def max_upload_bytes() -> int:
+    """Largest single file the upload route accepts. Default 64 GiB."""
+    return int(os.getenv("GANXTERM_MAX_UPLOAD_BYTES", str(64 * 1024**3)))
+
+
+class BodyLimitExceptUploads:
+    """
+    pytincture's 2 MiB body limit on every path except the upload route.
+
+    pytincture applies one limit to the whole app, and at its default every
+    photo over 2 MiB came back 413 before the upload route ever ran. So the
+    app-wide limit is raised to the upload cap, and this puts the original
+    back, outermost, on everything else: login, the BFF, the rest. It is
+    pytincture's own middleware class, so the behaviour there is unchanged.
+
+    The exempt route authenticates before reading a byte and streams what it
+    reads straight to the remote (see ``transfer.upload``).
+    """
+
+    def __init__(self, app, max_bytes: int = _DEFAULT_BODY_LIMIT) -> None:
+        self.app = app
+        self.limited = RequestBodyLimitMiddleware(app, max_bytes)
+
+    async def __call__(self, scope, receive, send) -> None:
+        if (
+            scope["type"] == "http"
+            and scope.get("method") == "POST"
+            and _UPLOAD_PATH.fullmatch(scope.get("path", ""))
+        ):
+            await self.app(scope, receive, send)
+        else:
+            await self.limited(scope, receive, send)
+
+
 def build_app():
     init_db()
 
@@ -177,6 +219,9 @@ def build_app():
             allowed_hosts=allowed_hosts(),
             canonical_origin=origin,
             trusted_proxy_headers=not loopback,
+            # The upload cap. Every other path is held to 2 MiB by
+            # BodyLimitExceptUploads, wrapped around the app below.
+            max_request_body_bytes=max(max_upload_bytes(), _DEFAULT_BODY_LIMIT),
             environment=hooks,
         )
     )
@@ -219,7 +264,7 @@ def build_app():
     async def _close_pool() -> None:
         sftp_pool.close_all()
 
-    return application
+    return BodyLimitExceptUploads(application)
 
 
 app = build_app()

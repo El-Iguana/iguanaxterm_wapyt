@@ -70,7 +70,14 @@ class SFTPPool:
 
     def _evict_idle(self) -> None:
         cutoff = time.monotonic() - _IDLE_TIMEOUT_SECONDS
-        stale = [key for key, conn in self._connections.items() if conn.last_used < cutoff]
+        # A held lock means a transfer is running on the channel right now.
+        # last_used is stamped when a transfer starts, so a large one looks
+        # idle after five minutes, and evicting it would cut it off mid-file.
+        stale = [
+            key
+            for key, conn in self._connections.items()
+            if conn.last_used < cutoff and not conn.lock.locked()
+        ]
         for key in stale:
             conn = self._connections.pop(key, None)
             self._keys.pop(key[1], None)

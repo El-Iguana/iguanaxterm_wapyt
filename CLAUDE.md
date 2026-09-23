@@ -160,6 +160,36 @@ demands that `allowed_hosts` and `canonical_origin` be **literal loopback IPs** 
 branch is unreachable once `AUTH_USER_AUTHENTICATOR` is set, because that path
 returns or raises before ever reaching it. Passwords are still required in dev.
 
+### pytincture caps every request body at 2 MiB
+
+`max_request_body_bytes` defaults to 2 MiB and applies to **every** route,
+including the ones this app adds. Uploads over 2 MiB were rejected with a 413
+before `transfer.upload` ran, which was found when a folder of photos to the NAS
+lost the one large file.
+
+The limit is per app in pytincture, not per route. `service.py` therefore sets
+it to the upload cap (`GANXTERM_MAX_UPLOAD_BYTES`, 64 GiB) and wraps the app
+in `BodyLimitExceptUploads`, which applies pytincture's own
+`RequestBodyLimitMiddleware` at 2 MiB to every path **except**
+`POST /files/<id>/upload`. So `build_app()` returns an ASGI wrapper, not the
+FastAPI app.
+
+The exempt route parses its own multipart body (`_UploadParts`, on
+python-multipart's push parser) instead of declaring `Form`/`File` params,
+because FastAPI would parse and spool the entire body to disk *before* the
+handler's auth and CSRF checks run. Now nothing is read until the caller is
+known, and bytes go straight to the remote a network read at a time. A failed
+or cancelled upload deletes its partial remote file.
+
+Two pool bugs showed up alongside, and both only bite on long transfers:
+
+- **Idle eviction killed live transfers.** `last_used` is stamped at acquire,
+  so a transfer longer than 5 minutes looked idle and the next acquire evicted
+  it. `_evict_idle` now skips a connection whose lock is held.
+- **The upload did `with conn.lock:` inside async code**, which is a blocking
+  `threading.Lock`. While a download held that lock, the whole event loop was
+  stalled. It is now acquired on a worker thread.
+
 ### No CDN, ever
 
 pytincture's CSP is `script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:`,

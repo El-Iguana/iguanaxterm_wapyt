@@ -74,6 +74,18 @@ with `.focus()` rather than a click. And a maximized tile covers its
 neighbours, so the other tile's button is unreachable until you restore —
 the test takes the path a person would.
 
+## Reconnect all smoke
+
+`reconnect_all_smoke.py` opens three SSH panes on one host and one FTP pane,
+tiles them, reloads, and checks that the toolbar offers **Reconnect all (4)**
+while nothing dials. Reconnecting one pane by hand drops the count to 3. The
+button then dials the rest, and the pacing is **measured**: the wrapped
+`WebSocket` records when each terminal socket opened and when its relay sent
+`connected`, and each dial must open after the previous one connected.
+
+It tiles before reloading because in tabbed mode only the active tab's
+Reconnect button is visible.
+
 ## Layout smoke
 
 `layout_smoke.py` covers persistence: mode, tile geometry, the tab each pane
@@ -118,7 +130,15 @@ Both targets must be up, as for the transfer and FTP smokes.
 
 ## harness.py
 
-Shared `reset_workspace()` and `new_pane()`. Every script calls the reset right
+Shared `reset_workspace()`, `new_pane()` and `session_leaf()`.
+
+Pick a session with `session_leaf(pg, "alpine-box")`, never "the last tree row".
+The FTP, large-upload and Reconnect all smokes add `ftps-box` to the same
+scratch database. The last row then belongs to whichever profile sorts last,
+and clicking a folder that is already open collapses it. Both broke the older
+scripts until they switched to the helper.
+
+Every script calls the reset right
 after login, because the layout persists and a run would otherwise inherit the
 last one's panes — which surfaces as a timeout on `pane_1` and looks nothing
 like the real cause. The reset also reloads the page once the layout is empty:

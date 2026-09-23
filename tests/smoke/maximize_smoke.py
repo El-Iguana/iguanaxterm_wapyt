@@ -3,7 +3,7 @@ from playwright.sync_api import sync_playwright
 
 import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-from harness import reset_workspace, new_pane  # noqa: E402
+from harness import reset_workspace, new_pane, session_leaf  # noqa: E402
 
 APP = "http://127.0.0.1:8799/iguanaxterm"
 results = []
@@ -58,10 +58,7 @@ with sync_playwright() as p:
         pg.click(".wapyt-form-button-primary")
         pg.wait_for_selector(".wapyt-tree-row", timeout=30000)
     pg.wait_for_timeout(400)
-    br = pg.locator(".wapyt-tree-row[data-branch='true']")
-    if br.count():
-        br.first.click(); pg.wait_for_timeout(300)
-    leaf = pg.locator(".wapyt-tree-row").last
+    leaf = session_leaf(pg)
 
     first = new_pane(pg, leaf); pg.wait_for_timeout(2000)
     second = new_pane(pg, leaf); pg.wait_for_timeout(2000)

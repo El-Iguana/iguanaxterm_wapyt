@@ -11,7 +11,7 @@ from playwright.sync_api import sync_playwright
 
 import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-from harness import reset_workspace  # noqa: E402
+from harness import reset_workspace, session_leaf  # noqa: E402
 
 
 BASE = "http://127.0.0.1:8799"
@@ -78,9 +78,7 @@ def login(page):
 
 def open_sftp(page):
     page.wait_for_selector(".wapyt-tree-row", timeout=30000)
-    page.click(".wapyt-tree-row[data-branch='true']")
-    page.wait_for_timeout(300)
-    page.locator(".wapyt-tree-row").nth(1).click()
+    session_leaf(page).click()
     page.click('.ix-toolbar-btn[data-action="sftp"]')
     page.wait_for_selector(".wapyt-datatable-table tbody tr", timeout=30000)
 

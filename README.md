@@ -45,7 +45,10 @@ whatever you were typing all survive the switch, in both directions.
 was on and the directory it was browsing are all saved per user. Restored panes
 deliberately do **not** reconnect — each one offers a Reconnect button, because
 dialling every saved session at once on page load is how you trip a server's
-`MaxStartups` limit and get a screen full of banner errors.
+`MaxStartups` limit and get a screen full of banner errors. To bring them all
+back, **Reconnect all** appears in the toolbar with a count of the waiting
+panes. It dials them one after another, each waiting for the previous one to
+connect or fail, so it never makes the burst that restoring avoids.
 
 ### Connections
 
@@ -340,6 +343,7 @@ resize path and the SFTP pool — everything else is unit-level. See
 | `narrow_pane_smoke.py` | the SFTP panel from 1200px down to 320px |
 | `tiled_smoke.py` | the grid, and switching layout modes |
 | `layout_smoke.py` | persistence, and that a restore dials nothing |
+| `reconnect_all_smoke.py` | Reconnect all: the count, and that dials are sequential |
 | `ftp_smoke.py` | files-only FTP panes over TLS, against `ftp_target.py` |
 | `maximize_smoke.py` | zooming a tile, and that the grid model is untouched |
 | `reparent_spike.py` | that a live terminal survives being moved |

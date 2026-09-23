@@ -83,6 +83,12 @@ TERMINAL_THEME = TerminalTheme(
     selection_background="#33467c",
 )
 
+# Reconnect all: how long to wait for one pane before moving on, and the pause
+# between dials. The pause gives a host's sshd a moment to retire the previous
+# pre-auth connection before the next one arrives.
+_RECONNECT_WAIT_SECONDS = 15
+_RECONNECT_GAP_SECONDS = 0.3
+
 _TOOLBAR_BUTTONS = (
     ("new", "New", "mdi-plus-circle"),
     ("edit", "Edit", "mdi-pencil"),
@@ -153,6 +159,8 @@ class IguanaXterm(MainWindow):
         self._tab_counter = 0
         self._mode = "tabbed"      # or "tiled"
         self._restoring = False    # suppresses saves while rebuilding
+        self._reconnecting_all = False
+        self._reconnect_progress = ""  # the button's label while it runs
         self._save_task = None
         self._grid = None          # the GridStack instance, once loaded
         self._grid_proxies: list = []
@@ -276,6 +284,14 @@ class IguanaXterm(MainWindow):
                 f'<span class="mdi {icon}"></span><span>{label}</span></button>'
             )
         parts.append('<span class="ix-toolbar-spacer"></span>')
+        # Shown only while restored panes are waiting to be dialled.
+        parts.append(
+            '<button type="button" class="ix-toolbar-btn ix-reconnect-all" '
+            'data-action="reconnect_all" hidden '
+            'title="Dial every restored connection, one after another">'
+            '<span class="mdi mdi-connection"></span>'
+            '<span class="ix-reconnect-all-label">Reconnect all</span></button>'
+        )
         parts.append(
             '<span class="ix-mode-switch" role="group" aria-label="Workspace layout">'
             '<button type="button" class="ix-mode-btn" data-mode="tabbed" '
@@ -450,6 +466,8 @@ class IguanaXterm(MainWindow):
             _spawn(self._admin_panel(), "admin panel")
         elif action == "password":
             self._password_dialog()
+        elif action == "reconnect_all":
+            _spawn(self._reconnect_all(), "reconnect all")
         elif self._selected_id is None:
             self._toast("Select a session first.")
         elif action == "edit":
@@ -549,6 +567,9 @@ class IguanaXterm(MainWindow):
             "session_id": session_id,
             "name": session["name"],
             "terminal": None,
+            # False until the pane is dialled; a restored pane waits here, and
+            # Reconnect all works through exactly these.
+            "dialled": False,
             "has_terminal": caps["terminal"],
             "has_files": caps["files"],
             # Set for real by _pane_select once the pane is dialled.
@@ -589,13 +610,18 @@ class IguanaXterm(MainWindow):
     def _connect_pane(self, pane_id: str) -> None:
         """Dial a pane's terminal, replacing any reconnect placeholder."""
         pane = self._panes.get(pane_id)
-        if pane is None or pane["terminal"] is not None:
+        if pane is None or pane["dialled"]:
             return
 
         host = js.document.getElementById(f"pane-term-{pane_id}")
         if not host:
             return
         host.innerHTML = ""
+        pane["dialled"] = True
+        # Resolved when the dial has an outcome either way; Reconnect all
+        # waits on it before starting the next one.
+        pane["settled"] = asyncio.get_event_loop().create_future()
+        self._sync_reconnect_all()
 
         if not pane["has_terminal"]:
             # A files-only pane "dials" by opening its file browser. The
@@ -620,6 +646,9 @@ class IguanaXterm(MainWindow):
             container=host,
         )
         terminal.on_error(lambda payload: self._toast(payload.get("message", "Error")))
+        for bind in (terminal.on_connect, terminal.on_error,
+                     terminal.on_disconnect, terminal.on_reconnect_failed):
+            bind(lambda _payload, pane_id=pane_id: self._settle(pane_id))
         pane["terminal"] = terminal
 
         restore = pane.pop("restore", None)
@@ -758,6 +787,7 @@ class IguanaXterm(MainWindow):
             # let a later click try again.
             pane["files_mounted"] = False
             self._pane_select(pane_id, "terminal")
+            self._settle(pane_id)
             return
         pane["sftp_held"] = True
 
@@ -802,6 +832,10 @@ class IguanaXterm(MainWindow):
         table.on_drop(lambda payload: self._sftp_upload(pane_id, payload))
 
         await self._sftp_navigate(pane_id, start_path)
+        if not pane["has_terminal"]:
+            # A files-only pane has no shell to wait for; its first listing,
+            # success or not, is the end of its dial.
+            self._settle(pane_id)
 
     def _on_tab_change(self, payload: dict) -> None:
         pane_id = payload.get("id") if isinstance(payload, dict) else payload
@@ -821,6 +855,11 @@ class IguanaXterm(MainWindow):
         pane = self._panes.pop(pane_id, None)
         if pane is None:
             return
+        # Closed while Reconnect all was waiting on it: let it move on.
+        settled = pane.get("settled")
+        if settled is not None and not settled.done():
+            settled.set_result(None)
+        self._sync_reconnect_all()
 
         # Closing the pane must close the socket. The dhxpyt rewrite left every
         # terminal it ever opened running on the server. A restored pane that
@@ -1140,11 +1179,79 @@ class IguanaXterm(MainWindow):
         finally:
             self._restoring = False
 
+        self._sync_reconnect_all()
         restored = len(self._panes)
         if restored:
             self._toast(
-                f"Restored {restored} connection(s). Click Reconnect to dial."
+                f"Restored {restored} connection(s). Reconnect one, "
+                "or use Reconnect all in the toolbar."
             )
+
+    # ------------------------------------------------------------------
+    # Reconnect all
+    # ------------------------------------------------------------------
+
+    def _waiting_panes(self) -> list:
+        return [pane_id for pane_id, pane in self._panes.items() if not pane["dialled"]]
+
+    def _sync_reconnect_all(self) -> None:
+        button = js.document.querySelector(".ix-reconnect-all")
+        if not button:
+            return
+        waiting = len(self._waiting_panes())
+        button.hidden = not (waiting or self._reconnecting_all)
+        button.disabled = self._reconnecting_all
+        label = button.querySelector(".ix-reconnect-all-label")
+        if label:
+            # Every dial re-syncs the button too, so the progress text lives in
+            # state rather than being passed in, or the first dial clobbers it.
+            label.textContent = (
+                self._reconnect_progress
+                if self._reconnecting_all
+                else f"Reconnect all ({waiting})"
+            )
+
+    def _settle(self, pane_id: str) -> None:
+        pane = self._panes.get(pane_id)
+        settled = pane.get("settled") if pane else None
+        if settled is not None and not settled.done():
+            settled.set_result(None)
+
+    async def _reconnect_all(self) -> None:
+        """
+        Dial every restored pane, one at a time.
+
+        Not all at once. Restoring deliberately does not dial, because N
+        simultaneous SSH handshakes to one host is what trips its MaxStartups
+        and gets the banner reset -- and a burst from this button would do
+        exactly the same. Each dial waits for its pane to connect or fail,
+        capped so one dead host cannot stall the rest.
+        """
+        if self._reconnecting_all:
+            return
+        queue = self._waiting_panes()
+        if not queue:
+            return
+        self._reconnecting_all = True
+        try:
+            for index, pane_id in enumerate(queue, start=1):
+                pane = self._panes.get(pane_id)
+                if pane is None or pane["dialled"]:
+                    continue  # closed, or reconnected by hand meanwhile
+                self._reconnect_progress = f"Reconnecting {index}/{len(queue)}…"
+                self._sync_reconnect_all()
+                self._connect_pane(pane_id)
+                settled = pane.get("settled")
+                if settled is not None:
+                    try:
+                        await asyncio.wait_for(asyncio.shield(settled), _RECONNECT_WAIT_SECONDS)
+                    except asyncio.TimeoutError:
+                        pass
+                await asyncio.sleep(_RECONNECT_GAP_SECONDS)
+        finally:
+            self._reconnecting_all = False
+            self._reconnect_progress = ""
+            self._sync_reconnect_all()
 
     def _sync_mode_buttons(self) -> None:
         for mode in ("tiled", "tabbed"):
@@ -2086,6 +2193,11 @@ _TOOLBAR_CSS = """
   cursor:pointer;font:inherit;}
 .ix-toolbar-btn:hover{background:#1f2937;border-color:#334155;}
 .ix-toolbar-btn .mdi{font-size:16px;}
+.ix-reconnect-all{margin-right:10px;color:#e2e8f0;background:#1e3a5f;
+  border-color:#2563eb;}
+.ix-reconnect-all:hover{background:#1e40af;border-color:#3b82f6;}
+.ix-reconnect-all:disabled{opacity:.7;cursor:progress;}
+.ix-reconnect-all[hidden]{display:none;}
 .ix-toolbar-sep{width:1px;height:20px;margin:0 6px;background:#334155;}
 .ix-toolbar-spacer{flex:1 1 auto;}
 .ix-toolbar-user{color:#64748b;font-size:12px;padding-right:6px;}

@@ -56,3 +56,18 @@ def new_pane(page, leaf, timeout_ms: int = 60000) -> str:
     fresh = [x for x in after if x not in before][0]
     page.wait_for_selector(f"#pane-term-{fresh} .xterm-rows", timeout=timeout_ms)
     return fresh
+
+
+def session_leaf(page, name: str = "alpine-box"):
+    """
+    The tree row for a saved session, by name.
+
+    Not "the last row": the FTP and large-upload smokes add their own profiles
+    to the same scratch database, and a folder that is already open collapses
+    when clicked. Only collapsed folders are opened here.
+    """
+    for branch in page.locator(".wapyt-tree-row[data-branch='true']").all():
+        if "▸" in branch.inner_text():  # ▸ = collapsed
+            branch.click()
+            page.wait_for_timeout(150)
+    return page.locator(f".wapyt-tree-row[data-node-id^='sess_']:has-text('{name}')").first

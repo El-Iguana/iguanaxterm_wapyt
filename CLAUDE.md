@@ -328,6 +328,20 @@ and `_connect_pane` mounts the Terminal on click. Measured in
 `tests/smoke/layout_smoke.py` by counting WebSocket constructions: 0 terminal
 sockets on restore, exactly 1 after one Reconnect.
 
+**Reconnect all** (toolbar, shown only while panes wait) dials them in
+order, **one at a time**: `_reconnect_all` awaits each pane's `settled`
+future before the next dial, up to 15 s, with a 0.3 s gap. A terminal pane
+settles on the widget's `connect`, `error`, `disconnect` or `reconnect_failed`
+event (multiple handlers are fine, since wapyt keeps a Set per event). A
+files-only pane settles once its first listing returns. `pane["dialled"]` is
+the waiting flag, not `terminal is None`, because a files-only pane never has a
+terminal. `reconnect_all_smoke.py` measures the ordering from socket
+timestamps.
+
+The button's label lives in `_reconnect_progress`, not in an argument. Every
+`_connect_pane` re-syncs the button, and passing the progress text in meant the
+first dial overwrote "Reconnecting 1/3…" with the idle count.
+
 Dead panes are filtered on **read**, not on write — a session deleted while the
 layout sat untouched still has to be dropped, and `get()` intersects the saved
 panes with the sessions you own.

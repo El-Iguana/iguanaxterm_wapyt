@@ -8,7 +8,7 @@ from playwright.sync_api import sync_playwright
 
 import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-from harness import reset_workspace  # noqa: E402
+from harness import reset_workspace, session_leaf  # noqa: E402
 
 
 BASE = "http://127.0.0.1:8799"
@@ -50,9 +50,7 @@ def main() -> int:
         page.wait_for_selector(".wapyt-tree-row", timeout=30000)
 
         # ── Terminal ─────────────────────────────────────────────────────────
-        page.click(".wapyt-tree-row[data-branch='true']")
-        page.wait_for_timeout(300)
-        leaf = page.locator(".wapyt-tree-row").nth(1)
+        leaf = session_leaf(page)
         check(leaf.inner_text().strip().endswith("alpine-box"), "session leaf present",
               repr(leaf.inner_text().strip()))
 

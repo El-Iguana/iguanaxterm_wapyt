@@ -35,8 +35,8 @@ Thumbs.db
 # Container secrets
 .env
 
-# Claude Code context
-CLAUDE.md
+# CLAUDE.md is deliberately TRACKED here: it documents the pytincture and
+# wapyt pitfalls that cost the most time, and several of them fail silently.
 downloads/
 
 # Vendored xterm.js (kept in-tree, served same-origin under CSP)

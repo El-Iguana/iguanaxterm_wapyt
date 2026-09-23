@@ -20,11 +20,28 @@ import logging
 
 logger = logging.getLogger("iguanaxterm.login")
 
+# The iguana, above the form. Styles are inline so this needs only the one
+# anchor below — every extra anchor is another thing that can go stale.
+# Served from the app's own /static mount, which satisfies `img-src 'self'`.
+_LOGO = (
+    b'<img src="/static/el_iguana_avatar.webp" alt="" width="88" height="88" '
+    b'style="width:88px;height:88px;border-radius:50%;object-fit:cover;'
+    b'display:block;margin:0 auto 14px;border:1px solid #d5d9e0;'
+    b'box-shadow:0 2px 10px rgba(15,23,42,.18);">'
+)
+
 # Exact fragments pytincture emits. Each must be found, or the rewrite is stale.
 _REWRITES: tuple[tuple[bytes, bytes], ...] = (
     (b'type="email" name="email"', b'type="text" name="email"'),
     (b'placeholder="Email"', b'placeholder="Username"'),
     (b'value="Login with Email"', b'value="Sign in"'),
+    # The generic "Welcome" becomes the app's own mark.
+    (b"<h2>Welcome</h2>", _LOGO + b"<h2 style=\"margin:0 0 4px\">IguanaXterm</h2>"),
+    (
+        b"<p>Please log in to continue</p>",
+        b'<p style="margin:0 0 18px;color:#64748b;font-size:13px;letter-spacing:.02em">'
+        b"SSH &middot; Telnet &middot; SFTP</p>",
+    ),
 )
 
 

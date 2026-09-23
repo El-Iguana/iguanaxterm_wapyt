@@ -148,9 +148,9 @@ with sync_playwright() as p:
               f"overflow={r['overflow']}")
 
     set_width(pg, 380)
-    pg.screenshot(path=f"{__file__.rsplit('/', 1)[0]}/phase2_narrow.png")
+    pg.screenshot(path="/tmp/ix_narrow_pane_380.png")
     set_width(pg, 1200)
-    pg.screenshot(path=f"{__file__.rsplit('/', 1)[0]}/phase2_wide.png")
+    pg.screenshot(path="/tmp/ix_narrow_pane_1200.png")
 
     print()
     print("console/page errors:", errs or "none")

@@ -52,3 +52,7 @@ vendor-wheels/
 # Rebuilt by ../wa_pytincture_widgetset/scripts/dev_wheel.sh
 appcode/wapyt-*.whl
 data/
+
+# Smoke-test screenshots are debugging aids, not repo content. Scoped rather
+# than a blanket *.png, which would have swallowed appcode/static/el_iguana.png.
+tests/smoke/*.png

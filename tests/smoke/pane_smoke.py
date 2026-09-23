@@ -117,7 +117,7 @@ with sync_playwright() as p:
     check(term_text(pg, "pane_2").count("PANE_TWO_MARKER") >= 1,
           "pane 2's terminal still alive too")
 
-    pg.screenshot(path=f"{__file__.rsplit('/', 1)[0]}/phase1.png")
+    pg.screenshot(path="/tmp/ix_pane_smoke.png")
     print()
     print("console/page errors:", errs or "none")
     print()

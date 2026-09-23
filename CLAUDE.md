@@ -73,6 +73,27 @@ is hardcoded to `dhxpyt.layout.MainWindow` (`pytincture/backend/pages.py`,
 `_main_window_base_names`). It never matches a wapyt base. Without
 `APP_ENTRYPOINT = "IguanaXterm"` in `appcode/iguanaxterm.py`, startup is a 422.
 
+### A BFF module is re-executed on every call
+
+pytincture loads a BFF module's source **afresh for each call**
+(`backend/app.py`: `prepare_call` → `_load_source_module`, which `exec`s the
+file). So a pool, registry, lock or executor defined at module level in a file
+with `@backend_for_frontend` is a **new, empty object on every request**.
+
+This went unnoticed for a long time. `sftp_pool` lived in `sftp_service.py`, so
+the "pool" dialled a new SSH connection on every file-browser action and never
+closed any of them. Measured on the test target: one Files open plus five
+refreshes meant **7 logins and ~14 live sshd sessions**, against 2 logins after
+the fix. The unit tests all passed throughout, because they import the module
+once.
+
+**Rule: state that must persist lives in a plain module**: `services/pool.py`
+(both pools, the walk executor). BFF modules
+import it from there; a normal import is cached in `sys.modules`.
+`tests/test_bff_state.py` loads the BFF modules with pytincture's own loader,
+twice, to prove it. It also fails if any BFF module grows a module-level
+container or call.
+
 ### Build UI in `load_ui()`, never `__init__`
 
 wapyt's `LoadUICaller` metaclass calls `load_ui()` after construction. Defining
@@ -474,6 +495,12 @@ tab inside the connection's own pane.
   in-flight transfer dying. `tests/test_sftp_pool.py` pins it at the unit level;
   a mutation of `release()` back to the old semantics fails those tests, which
   is how we know they bite.
+
+  **Correction (2026-09-23):** until the pool moved to `pool.py`, none of this
+  applied at runtime, because the pool was rebuilt on every BFF call (see
+  *A BFF module is re-executed on every call*). The unit tests were right
+  about the class; the app never used one instance twice. The same blind spot
+  is why the browser could not tell the difference.
 - **Narrow panes are handled (Phase 2, 2026-09-23)** with container queries on
   `.ix-pane`, not media queries: a pane is narrow because its cell is narrow,
   which has nothing to do with the window. Measured, not guessed — the toolbar's

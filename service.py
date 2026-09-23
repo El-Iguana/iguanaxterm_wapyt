@@ -55,7 +55,7 @@ from pytincture.backend.middleware import RequestBodyLimitMiddleware  # noqa: E4
 
 from services.db import init_db, session_secret  # noqa: E402
 from services.login_page import LoginPageMiddleware, check_at_startup  # noqa: E402
-from services.sftp_service import sftp_pool  # noqa: E402
+from services.pool import sftp_pool, transfer_pool  # noqa: E402
 from services.terminal_ws import router as terminal_router  # noqa: E402
 from services.transfer import router as transfer_router  # noqa: E402
 
@@ -263,6 +263,7 @@ def build_app():
     @application.on_event("shutdown")
     async def _close_pool() -> None:
         sftp_pool.close_all()
+        transfer_pool.close_all()
 
     return BodyLimitExceptUploads(application)
 

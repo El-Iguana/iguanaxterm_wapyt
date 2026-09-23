@@ -31,15 +31,15 @@ from services.db import fetch_session
 from services.paths import is_safe_name
 from services import ftp as ftp_helpers
 from services import ssh as ssh_helpers
-from services.sftp_service import SFTPPool
+from services.pool import transfer_pool
 
 router = APIRouter(prefix="/files")
 
 # 256 KiB balances syscall overhead against peak memory per in-flight transfer.
 _CHUNK = 256 * 1024
 
-# Separate from sftp_service.sftp_pool on purpose — see the module docstring.
-transfer_pool = SFTPPool()
+# transfer_pool is separate from the interactive sftp_pool on purpose -- see
+# the module docstring. Both live in pool.py.
 
 
 def _require_user(request: Request) -> int:

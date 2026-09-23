@@ -148,6 +148,7 @@ class IguanaXterm(MainWindow):
         self._save_task = None
         self._grid = None          # the GridStack instance, once loaded
         self._grid_proxies: list = []
+        self._maximized: str | None = None
         self._me: dict = {}
 
         self._build_chrome()
@@ -308,6 +309,11 @@ class IguanaXterm(MainWindow):
                 self._pane_select(pane_tab.dataset.pane, pane_tab.dataset.paneTab)
                 return
 
+            maximizer = event.target.closest("[data-pane-max]")
+            if maximizer:
+                self._toggle_maximize(maximizer.dataset.paneMax)
+                return
+
             closer = event.target.closest("[data-pane-close]")
             if closer:
                 self._close_pane(closer.dataset.paneClose)
@@ -324,6 +330,21 @@ class IguanaXterm(MainWindow):
 
         self._toolbar_proxy = create_proxy(_on_click)
         js.document.addEventListener("click", self._toolbar_proxy)
+
+        def _on_key(event) -> None:
+            # Escape restores a maximized tile -- but never when the focus is
+            # in a terminal. Escape belongs to the remote there: it is how you
+            # leave insert mode in vim, and stealing it would make the editor
+            # people actually use unusable. Use the button in that case.
+            if event.key != "Escape" or not self._maximized:
+                return
+            target = event.target
+            if target and hasattr(target, "closest") and target.closest(".wapyt-terminal"):
+                return
+            self._toggle_maximize(self._maximized)
+
+        self._key_proxy = create_proxy(_on_key)
+        js.document.addEventListener("keydown", self._key_proxy)
 
     # ------------------------------------------------------------------
     # Identity and session list
@@ -640,6 +661,9 @@ class IguanaXterm(MainWindow):
             f'      <span class="mdi mdi-folder-network"></span><span>Files</span></button>'
             f'    <span class="ix-pane-spacer"></span>'
             f'    <span class="ix-pane-host" title="{label}">{label}</span>'
+            f'    <button type="button" class="ix-pane-max" data-pane-max="{pane_id}"'
+            f'            title="Maximize this pane" aria-pressed="false">'
+            f'      <span class="mdi mdi-arrow-expand"></span></button>'
             f'    <button type="button" class="ix-pane-close" data-pane-close="{pane_id}"'
             f'            title="Close this connection">&times;</button>'
             f'  </div>'
@@ -756,6 +780,8 @@ class IguanaXterm(MainWindow):
 
     def _on_tab_close(self, payload: dict) -> None:
         pane_id = payload.get("id") if isinstance(payload, dict) else payload
+        if self._maximized == pane_id:
+            self._maximized = None
         pane = self._panes.pop(pane_id, None)
         if pane is None:
             return
@@ -869,6 +895,10 @@ class IguanaXterm(MainWindow):
         self._schedule_layout_save()
 
     def _go_tabbed(self) -> None:
+        # A maximized tile means nothing in a tabbed workspace, and leaving the
+        # flag set would restore into a pane that is no longer in the grid.
+        if self._maximized:
+            self._toggle_maximize(self._maximized)
         for pane_id in list(self._panes):
             root = js.document.querySelector(f'.ix-pane[data-pane="{pane_id}"]')
             cell = self.tabs.get_cell(pane_id)
@@ -883,6 +913,48 @@ class IguanaXterm(MainWindow):
         self._sync_mode_buttons()
         self._fit_visible_panes()
         self._schedule_layout_save()
+
+    def _toggle_maximize(self, pane_id: str | None) -> None:
+        """
+        Zoom one tile to fill the workspace, or restore it.
+
+        Deliberately presentational: the tile is overlaid with CSS and the grid
+        model is not touched, so every other tile keeps its position and the
+        saved layout is unaffected. Resizing the item to full width instead
+        would reflow its neighbours and persist that reflow.
+        """
+        if pane_id not in self._panes:
+            return
+        target = None if self._maximized == pane_id else pane_id
+
+        for candidate in self._panes:
+            item = js.document.querySelector(
+                f'#ix-grid-host .grid-stack-item[data-pane="{candidate}"]'
+            )
+            button = js.document.querySelector(f'[data-pane-max="{candidate}"]')
+            on = candidate == target
+            if item:
+                if on:
+                    item.dataset.maximized = "true"
+                else:
+                    item.removeAttribute("data-maximized")
+            if button:
+                button.setAttribute("aria-pressed", "true" if on else "false")
+                button.title = "Restore this pane" if on else "Maximize this pane"
+                icon = button.querySelector(".mdi")
+                if icon:
+                    icon.className = (
+                        "mdi mdi-arrow-collapse" if on else "mdi mdi-arrow-expand"
+                    )
+
+        self._maximized = target
+        if target:
+            # A grid taller than its host can be scrolled; the maximized tile
+            # is pinned to the top of it, so scroll there or it opens offscreen.
+            host = js.document.getElementById("ix-grid-host")
+            if host:
+                host.scrollTop = 0
+        self._fit_visible_panes()
 
     def _close_pane(self, pane_id: str) -> None:
         """
@@ -2009,7 +2081,7 @@ _GRID_CSS = """
 .grid-stack-item-content .ix-pane{height:100%;}
 /* Grip and close only mean anything while tiled: in tabbed mode the tab strip
    already moves and closes a pane. */
-.ix-pane-grip,.ix-pane-close{display:none;}
+.ix-pane-grip,.ix-pane-close,.ix-pane-max{display:none;}
 .grid-stack .ix-pane-grip{display:inline-flex;align-items:center;color:#475569;
   cursor:move;font-size:16px;padding:0 2px;}
 .grid-stack .ix-pane-grip:hover{color:#94a3b8;}
@@ -2018,6 +2090,31 @@ _GRID_CSS = """
   background:transparent;border:none;border-radius:4px;cursor:pointer;
   font-size:16px;line-height:1;}
 .grid-stack .ix-pane-close:hover{background:#7f1d1d;color:#fecaca;}
+.grid-stack .ix-pane-max{display:inline-flex;align-items:center;
+  justify-content:center;width:20px;height:20px;padding:0;color:#64748b;
+  background:transparent;border:none;border-radius:4px;cursor:pointer;
+  font-size:14px;}
+.grid-stack .ix-pane-max:hover{background:#1f2937;color:#cbd5f5;}
+.grid-stack .ix-pane-max[aria-pressed="true"]{color:#38bdf8;}
+
+/* Maximize is presentational: the tile is overlaid on the grid rather than
+   resized in it, so its neighbours keep their positions and the saved layout
+   is untouched. GridStack sets width/height inline as calc() over its CSS
+   variables, hence !important. The grid is position:relative and stretched to
+   the host by min-height, so inset:0 fills the workspace. */
+#ix-grid-host .grid-stack-item[data-maximized]{
+  position:absolute !important;
+  inset:0 !important;
+  width:auto !important;
+  height:auto !important;
+  margin:0 !important;
+  transform:none !important;
+  z-index:30;
+}
+/* Dragging or resizing a tile that is pretending to fill the workspace would
+   move it in the grid model behind the overlay. */
+#ix-grid-host .grid-stack-item[data-maximized] .ui-resizable-handle,
+#ix-grid-host .grid-stack-item[data-maximized] .ix-pane-grip{display:none;}
 .ix-reconnect{display:flex;flex-direction:column;align-items:center;
   justify-content:center;gap:6px;height:100%;padding:20px;text-align:center;}
 .ix-reconnect-icon{font-size:30px;color:#334155;}

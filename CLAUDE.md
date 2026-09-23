@@ -213,6 +213,29 @@ decided 2026-09-23; not built yet.
   a Reconnect button. Auto-dialling N sessions on page load walks straight into
   the `MaxStartups` banner resets that `ssh.py`'s retry exists to survive.
 
+### Per-pane maximize (2026-09-23)
+
+A tile zooms to fill the workspace via `_toggle_maximize`, and it is
+**presentational on purpose**: `[data-maximized]` overlays the item with
+`position:absolute; inset:0` and the grid model is not touched, so neighbours
+keep their positions and the saved layout is unaffected. Resizing the item to
+full width instead would reflow its neighbours *and persist that reflow*.
+
+- GridStack v14 sets `width`/`height` inline as `calc()` over its CSS
+  variables, so the overlay rules need `!important`.
+- `.grid-stack` is `position:relative` and stretched by `min-height:100%`, so
+  `inset:0` resolves to the whole workspace. A grid taller than its host can be
+  scrolled, so maximizing also scrolls the host to the top.
+- The drag grip and resize handle are hidden while maximized: they would move
+  the item in the model behind an overlay that is pretending to fill the
+  screen.
+- **Escape is ignored when the focus is inside a terminal.** Escape belongs to
+  the remote there — stealing it breaks vim. The guard checks
+  `event.target.closest(".wapyt-terminal")`.
+- A maximized tile covers its neighbours, so another tile's maximize button is
+  genuinely unreachable until you restore. That is fine, but it means a test
+  cannot click straight from one to the other.
+
 ### Phase 4 is built (2026-09-23)
 
 The workspace layout persists per user: `layouts` table (one row, opaque JSON),

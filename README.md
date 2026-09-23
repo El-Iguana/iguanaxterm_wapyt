@@ -32,6 +32,12 @@ The workspace lays panes out two ways, switched from the toolbar:
   so several sessions stay visible at once. Drag a pane by its grip, resize
   from the corner; the remote PTY follows the tile.
 
+Any tile can be **maximized** to fill the workspace and restored again — by its
+button, or with Escape when the focus is not in a terminal (inside one, Escape
+belongs to the remote; that is how you leave insert mode in vim). Maximizing is
+purely a view: the grid keeps its positions, so restoring puts everything back
+exactly as it was and the saved layout is never touched.
+
 Switching modes moves panes, it does not rebuild them: scrollback, sockets and
 whatever you were typing all survive the switch, in both directions.
 
@@ -73,7 +79,6 @@ dialling every saved session at once on page load is how you trip a server's
 
 ## Planned
 
-- **Per-pane maximize** — zoom one tile to fill the workspace and back.
 - **Transfer resume** — HTTP range requests for interrupted downloads.
 
 ## Stack
@@ -320,6 +325,7 @@ resize path and the SFTP pool — everything else is unit-level. See
 | `narrow_pane_smoke.py` | the SFTP panel from 1200px down to 320px |
 | `tiled_smoke.py` | the grid, and switching layout modes |
 | `layout_smoke.py` | persistence, and that a restore dials nothing |
+| `maximize_smoke.py` | zooming a tile, and that the grid model is untouched |
 | `reparent_spike.py` | that a live terminal survives being moved |
 | `resize_storm_probe.py` | PTY resize traffic during a drag (a measurement) |
 

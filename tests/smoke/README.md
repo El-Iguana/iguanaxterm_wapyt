@@ -57,6 +57,23 @@ after a correct `release()`. The refcount is pinned by the unit tests in
 `tests/test_sftp_pool.py` instead, and the damage it prevents is an in-flight
 transfer dying, not a later listing.
 
+## Maximize smoke
+
+`maximize_smoke.py` covers zooming a tile: it fills the workspace, sits on top,
+grows the remote PTY, hides its own grip and resize handle, and — the point —
+leaves the grid **model** byte-identical, so restoring puts every neighbour
+back where it was.
+
+```bash
+python3 tests/smoke/maximize_smoke.py
+```
+
+Two things it had to be taught. Escape only restores from outside a terminal
+(inside one it goes to the remote, which is correct), so the test moves focus
+with `.focus()` rather than a click. And a maximized tile covers its
+neighbours, so the other tile's button is unreachable until you restore —
+the test takes the path a person would.
+
 ## Layout smoke
 
 `layout_smoke.py` covers persistence: mode, tile geometry, the tab each pane

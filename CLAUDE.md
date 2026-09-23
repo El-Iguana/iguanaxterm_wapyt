@@ -194,6 +194,26 @@ panel measures 0×0 and fitting against that produces a 1×1 terminal that never
 recovers. `Terminal.fit()` skips while hidden and a `ResizeObserver` re-fits on
 the way back; `_on_tab_change` also calls `fit()` explicitly.
 
+## Planned: GridStack tiling
+
+A wapyt `GridPanel` widget wrapping [GridStack](https://gridstackjs.com), so
+terminals and file browsers can be tiled and resized rather than tabbed. Notes
+for whoever picks it up:
+
+- **Vendor it, do not CDN it.** Same constraint as xterm: pytincture serves
+  `script-src 'self'`. GridStack is MIT, so bundling is fine. Decide early
+  whether it lives in the widgetset (paid for by every wapyt app on every page
+  load) or in the consuming app served from its own mount — xterm went the
+  second way for exactly that reason, and GridStack is smaller but not free.
+- **Terminals must not be re-mounted on drag.** GridStack moves DOM nodes; an
+  xterm that gets detached and re-attached loses its buffer. Move the grid
+  item's container, never the terminal's host element, and call `fit()` on
+  resize-stop rather than during the drag.
+- **Resize storms.** Each grid resize ends in a PTY resize message. Debounce on
+  `resizestop`, not on every intermediate frame.
+- **Layout persistence** belongs in a BFF service, per user, alongside the
+  session library — `GridStack.save()` returns a serialisable layout.
+
 ## Live smoke test
 
 `tests/smoke/` drives the real UI against a throwaway SSH container — the only

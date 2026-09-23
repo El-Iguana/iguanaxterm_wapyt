@@ -24,6 +24,7 @@ import traceback
 import js
 from pyodide.ffi import create_proxy
 
+from wapyt import filetransfer
 from wapyt import (
     CellConfig,
     ColumnConfig,
@@ -50,7 +51,7 @@ from wapyt import (
     TreeItem,
 )
 
-from services.paths import breadcrumbs, parent_path, session_icon
+from services.paths import breadcrumbs, format_size, parent_path, session_icon
 from services.session_service import SessionService
 from services.sftp_service import SFTPService
 from services.user_service import UserService
@@ -192,13 +193,18 @@ class IguanaXterm(MainWindow):
 
     def _wire_toolbar(self) -> None:
         def _on_click(event) -> None:
-            button = event.target.closest(".ix-toolbar-btn")
-            # A DOM miss arrives as JsNull, not None: `button is None` is always
-            # False and every click outside the toolbar would raise. JsNull is
+            # A DOM miss arrives as JsNull, not None: `x is None` is always
+            # False for it and the next attribute access raises. JsNull is
             # falsy, so test truthiness for anything coming back over the FFI.
-            if not button:
+            button = event.target.closest(".ix-toolbar-btn")
+            if button:
+                self._on_toolbar(button.dataset.action)
                 return
-            self._on_toolbar(button.dataset.action)
+            # One delegated listener covers the per-tab SFTP toolbars too, so
+            # each new tab does not add another document-level handler.
+            sftp_button = event.target.closest("[data-sftp]")
+            if sftp_button:
+                self._sftp_click(sftp_button.dataset.sftp, sftp_button.dataset.tab)
 
         self._toolbar_proxy = create_proxy(_on_click)
         js.document.addEventListener("click", self._toolbar_proxy)
@@ -467,8 +473,31 @@ class IguanaXterm(MainWindow):
         container = cell.getContainer() if hasattr(cell, "getContainer") else cell
         container.innerHTML = (
             f'<div class="ix-sftp">'
+            f'  <div class="ix-sftp-bar">'
+            f'    <button type="button" class="ix-sftp-btn" data-sftp="upload" data-tab="{tab_id}">'
+            f'      <span class="mdi mdi-upload"></span><span>Upload</span></button>'
+            f'    <button type="button" class="ix-sftp-btn" data-sftp="upload-folder" data-tab="{tab_id}">'
+            f'      <span class="mdi mdi-folder-upload"></span><span>Upload folder</span></button>'
+            f'    <button type="button" class="ix-sftp-btn" data-sftp="download" data-tab="{tab_id}">'
+            f'      <span class="mdi mdi-download"></span><span>Download</span></button>'
+            f'    <span class="ix-sftp-sep"></span>'
+            f'    <button type="button" class="ix-sftp-btn" data-sftp="mkdir" data-tab="{tab_id}">'
+            f'      <span class="mdi mdi-folder-plus"></span><span>New folder</span></button>'
+            f'    <button type="button" class="ix-sftp-btn" data-sftp="refresh" data-tab="{tab_id}">'
+            f'      <span class="mdi mdi-refresh"></span><span>Refresh</span></button>'
+            f'    <span class="ix-sftp-spacer"></span>'
+            f'    <span class="ix-sftp-note" id="note-{tab_id}"></span>'
+            f'  </div>'
             f'  <div class="ix-crumbs" id="crumbs-{tab_id}"></div>'
             f'  <div class="ix-sftp-table" id="table-{tab_id}"></div>'
+            f'  <div class="ix-queue" id="queue-{tab_id}" hidden>'
+            f'    <div class="ix-queue-head">'
+            f'      <span class="ix-queue-title">Transfers</span>'
+            f'      <button type="button" class="ix-queue-clear" data-sftp="clear-queue" '
+            f'              data-tab="{tab_id}">Clear finished</button>'
+            f'    </div>'
+            f'    <div class="ix-queue-rows" id="queue-rows-{tab_id}"></div>'
+            f'  </div>'
             f"</div><style>{_SFTP_CSS}</style>"
         )
         return {
@@ -495,6 +524,23 @@ class IguanaXterm(MainWindow):
         entry["path"] = result["path"]
         entry["table"].set_rows(result["entries"])
         self._render_crumbs(tab_id, result["path"])
+        self._show_picker_note(tab_id)
+
+    def _show_picker_note(self, tab_id: str) -> None:
+        """Say up front when downloads cannot choose a destination."""
+        note = js.document.getElementById(f"note-{tab_id}")
+        if not note or note.textContent:
+            return
+        caps = filetransfer.capabilities()
+        if caps.pickers:
+            return
+        note.textContent = (
+            "This browser cannot choose a download location — files go to your "
+            "downloads folder. Chrome or Edge can."
+            if caps.secure_context
+            else "Destination picking needs HTTPS; downloads go to your "
+                 "downloads folder."
+        )
 
     def _render_crumbs(self, tab_id: str, path: str) -> None:
         holder = js.document.getElementById(f"crumbs-{tab_id}")
@@ -552,63 +598,342 @@ class IguanaXterm(MainWindow):
         elif action == "rename":
             self._sftp_rename(tab_id, selected[0])
 
-    def _sftp_download(self, tab_id: str, paths: list) -> None:
-        """
-        Pull files through the streaming transfer route.
+    # ── Transfers ──────────────────────────────────────────────────────────
+    #
+    # Bytes never cross the FFI. wapyt.filetransfer pipes the network stream
+    # straight into a chosen file handle, and uploads go from a File object to
+    # XMLHttpRequest. Python picks what moves and renders progress.
 
-        Not the BFF: bytes in JSON means base64, a third larger and resident in
-        Pyodide's heap on the way past. An anchor click carries the same session
-        cookie and streams straight to disk.
+    def _sftp_click(self, action: str, tab_id: str) -> None:
         """
+        SFTP toolbar dispatch.
+
+        The picker calls below MUST be the first await in their coroutine: the
+        File System Access API needs transient user activation, and the first
+        await consumes it. Anything fetched before the picker — a listing, a BFF
+        call — loses the activation and the browser raises SecurityError on a
+        perfectly valid setup.
+        """
+        if action == "upload":
+            _spawn(self._upload_picked(tab_id, directory=False), "sftp upload")
+        elif action == "upload-folder":
+            _spawn(self._upload_picked(tab_id, directory=True), "sftp upload folder")
+        elif action == "download":
+            entry = self._sftp_tabs.get(tab_id)
+            selected = entry["table"].get_selected_ids() if entry else []
+            if not selected:
+                self._toast("Select something to download first.")
+                return
+            _spawn(self._download(tab_id, selected), "sftp download")
+        elif action == "mkdir":
+            self._sftp_mkdir(tab_id)
+        elif action == "refresh":
+            entry = self._sftp_tabs.get(tab_id)
+            if entry:
+                _spawn(self._sftp_navigate(tab_id, entry["path"]), "sftp refresh")
+        elif action == "clear-queue":
+            self._queue_clear_finished(tab_id)
+
+    def _download_url(self, session_id: int, path: str) -> str:
+        return (
+            f"/files/{session_id}/download?path={js.encodeURIComponent(path)}"
+        )
+
+    async def _download(self, tab_id: str, paths: list) -> None:
         entry = self._sftp_tabs.get(tab_id)
         if entry is None:
             return
-        for path in paths:
-            row = entry["table"].get_row(path) or {}
-            if row.get("is_dir"):
-                self._toast("Folder download is not in this build yet.")
-                continue
-            url = (
-                f"/files/{entry['session_id']}/download"
-                f"?path={js.encodeURIComponent(path)}"
+
+        rows = [entry["table"].get_row(p) or {} for p in paths]
+        files = [r for r in rows if r and not r.get("is_dir")]
+        folders = [r for r in rows if r and r.get("is_dir")]
+        caps = filetransfer.capabilities()
+
+        # No pickers (Firefox, or a misconfigured non-secure origin): fall back
+        # to the browser's download directory and say so, rather than silently
+        # doing something different. The original app learned this the hard way
+        # — a silent fallback produced one Save-As dialog per file.
+        if not caps.pickers:
+            if folders:
+                self._toast(
+                    "This browser cannot choose a destination folder, so whole "
+                    "folders cannot be downloaded. Chrome or Edge can."
+                )
+                return
+            for row in files:
+                filetransfer.download_via_anchor(
+                    self._download_url(entry["session_id"], row["id"]), row["name"]
+                )
+            self._toast(f"Sent {len(files)} file(s) to your downloads folder.")
+            return
+
+        # One plain file gets a Save dialog with a pre-filled name; anything
+        # else needs a destination folder to write into.
+        if len(files) == 1 and not folders:
+            row = files[0]
+            chosen = await filetransfer.pick_save_file(row["name"])
+            if not chosen.ok:
+                if not chosen.cancelled:
+                    self._toast(chosen.error or "Could not open the save dialog.")
+                return
+            await self._run_download_queue(
+                tab_id, [(row["id"], row["name"], chosen.id, None)]
             )
-            anchor = js.document.createElement("a")
-            anchor.href = url
-            anchor.download = row.get("name", "download")
-            js.document.body.appendChild(anchor)
-            anchor.click()
-            anchor.remove()
+            filetransfer.release(chosen.id)
+            return
+
+        chosen = await filetransfer.pick_folder()
+        if not chosen.ok:
+            if not chosen.cancelled:
+                self._toast(chosen.error or "Could not open the folder picker.")
+            return
+
+        jobs = [(row["id"], row["name"], None, row["name"]) for row in files]
+        for folder in folders:
+            jobs.extend(await self._expand_folder(entry["session_id"], folder))
+
+        if not jobs:
+            self._toast("Nothing to download.")
+            filetransfer.release(chosen.id)
+            return
+
+        await self._run_download_queue(tab_id, jobs, folder_id=chosen.id)
+        filetransfer.release(chosen.id)
+
+    async def _expand_folder(self, session_id: int, folder: dict) -> list:
+        """
+        Walk a remote folder, streaming entries as they are found.
+
+        SFTPService.walk is a @bff_stream, so the count moves while the remote
+        walk is still running instead of hanging on a silent traversal.
+        """
+        parent = folder["id"].rstrip("/")
+        base = folder["name"]
+        jobs: list = []
+        async for item in SFTPService().walk(session_id, folder["id"]):
+            if item.get("error"):
+                self._toast(item["error"].get("message", "Walk failed"))
+                continue
+            if item.get("done"):
+                break
+            remote = item["path"]
+            relative = remote[len(parent) + 1:] if remote.startswith(parent + "/") else remote.rsplit("/", 1)[-1]
+            jobs.append((remote, relative.rsplit("/", 1)[-1], None, f"{base}/{relative}"))
+            self._toast(f"Scanning {base}… {len(jobs)} file(s)")
+        return jobs
+
+    async def _run_download_queue(
+        self, tab_id: str, jobs: list, folder_id: str = ""
+    ) -> None:
+        entry = self._sftp_tabs.get(tab_id)
+        if entry is None:
+            return
+        session_id = entry["session_id"]
+        done = 0
+
+        for remote, label, file_handle, relative in jobs:
+            transfer_id = self._queue_add(tab_id, label, "download")
+            url = self._download_url(session_id, remote)
+            progress = self._queue_progress(tab_id, transfer_id)
+
+            if file_handle:
+                outcome = await filetransfer.save_file(
+                    file_handle, url, transfer_id, progress
+                )
+            else:
+                outcome = await filetransfer.save_into(
+                    folder_id, relative, url, transfer_id, progress
+                )
+
+            if outcome.ok:
+                done += 1
+                self._queue_finish(tab_id, transfer_id, "done")
+            elif outcome.cancelled:
+                self._queue_finish(tab_id, transfer_id, "cancelled")
+            else:
+                self._queue_finish(tab_id, transfer_id, "failed", outcome.error)
+
+        self._toast(f"Downloaded {done} of {len(jobs)} file(s).")
+
+    # ── Upload ─────────────────────────────────────────────────────────────
+
+    async def _upload_picked(self, tab_id: str, directory: bool) -> None:
+        # First await in the handler, while user activation still holds.
+        chosen = await filetransfer.pick_files(multiple=True, directory=directory)
+        if not chosen.ok:
+            if not chosen.cancelled:
+                self._toast(chosen.error or "Could not open the file picker.")
+            return
+        await self._run_upload_queue(tab_id, chosen.files)
 
     def _sftp_upload(self, tab_id: str, payload: dict) -> None:
+        """Drag-and-drop upload: the table already holds the File handles."""
         entry = self._sftp_tabs.get(tab_id)
         if entry is None:
             return
-        files = entry["table"].get_dropped_files()
-        _spawn(self._do_upload(tab_id, files), "sftp upload")
-
-    async def _do_upload(self, tab_id: str, files) -> None:
-        entry = self._sftp_tabs.get(tab_id)
-        if entry is None:
-            return
-        total = int(files.length) if hasattr(files, "length") else len(files)
-        for index in range(total):
-            handle = files[index]
-            self._toast(f"Uploading {handle.name} ({index + 1}/{total})…")
-            form = js.FormData.new()
-            form.append("path", entry["path"])
-            form.append("file", handle)
-            options = js.Object.new()
-            options.method = "POST"
-            options.body = form
-            options.credentials = "same-origin"
-            response = await js.fetch(
-                f"/files/{entry['session_id']}/upload", options
+        dropped = entry["table"].get_dropped_files()
+        count = int(dropped.length) if hasattr(dropped, "length") else len(dropped)
+        picked = [
+            filetransfer.PickedFile(
+                id=filetransfer.adopt(dropped[i]),
+                name=dropped[i].name,
+                size=int(dropped[i].size),
+                path=dropped[i].name,
             )
-            if not response.ok:
-                self._toast(f"Upload failed: {handle.name}")
-                return
-        self._toast(f"Uploaded {total} file(s).")
+            for i in range(count)
+        ]
+        _spawn(self._run_upload_queue(tab_id, picked), "sftp drop upload")
+
+    async def _run_upload_queue(self, tab_id: str, files: list) -> None:
+        entry = self._sftp_tabs.get(tab_id)
+        if entry is None or not files:
+            return
+        url = f"/files/{entry['session_id']}/upload"
+        done = 0
+
+        for picked in files:
+            if not picked.id:
+                continue
+            transfer_id = self._queue_add(tab_id, picked.name, "upload")
+            fields = {"path": entry["path"]}
+            # A directory pick carries the folder structure; the route recreates
+            # it remotely rather than flattening everything into one directory.
+            if picked.path and picked.path != picked.name:
+                fields["relative_path"] = picked.path
+
+            outcome = await filetransfer.upload(
+                url, picked.id, fields, transfer_id,
+                self._queue_progress(tab_id, transfer_id),
+            )
+            filetransfer.release(picked.id)
+
+            if outcome.ok:
+                done += 1
+                self._queue_finish(tab_id, transfer_id, "done")
+            elif outcome.cancelled:
+                self._queue_finish(tab_id, transfer_id, "cancelled")
+            else:
+                self._queue_finish(tab_id, transfer_id, "failed", outcome.error)
+
+        self._toast(f"Uploaded {done} of {len(files)} file(s).")
         await self._sftp_navigate(tab_id, entry["path"])
+
+    def _sftp_mkdir(self, tab_id: str) -> None:
+        entry = self._sftp_tabs.get(tab_id)
+        if entry is None:
+            return
+        name = js.prompt("New folder name:")
+        if not name:
+            return
+
+        async def _run() -> None:
+            result = await SFTPService().mkdir_async(
+                entry["session_id"], entry["path"], name
+            )
+            if not result.get("ok"):
+                self._toast(result.get("error", "Could not create folder"))
+            await self._sftp_navigate(tab_id, entry["path"])
+
+        _spawn(_run(), "sftp mkdir")
+
+    # ── Transfer queue ─────────────────────────────────────────────────────
+    #
+    # Hand-built rather than a DataTable: progress updates land several times a
+    # second, and DataTable re-renders every row on set_rows, which would thrash
+    # the whole table. Here each row's own bar is mutated in place.
+
+    def _queue_add(self, tab_id: str, label: str, kind: str) -> str:
+        self._transfer_seq = getattr(self, "_transfer_seq", 0) + 1
+        transfer_id = f"tx{self._transfer_seq}"
+
+        holder = js.document.getElementById(f"queue-{tab_id}")
+        rows = js.document.getElementById(f"queue-rows-{tab_id}")
+        if not holder or not rows:
+            return transfer_id
+        holder.hidden = False
+
+        row = js.document.createElement("div")
+        row.className = "ix-queue-row"
+        row.id = f"{tab_id}-{transfer_id}"
+
+        icon = js.document.createElement("span")
+        icon.className = "mdi mdi-" + ("upload" if kind == "upload" else "download")
+        row.appendChild(icon)
+
+        name = js.document.createElement("span")
+        name.className = "ix-queue-name"
+        name.textContent = label          # remote-controlled: never innerHTML
+        name.title = label
+        row.appendChild(name)
+
+        track = js.document.createElement("span")
+        track.className = "ix-queue-track"
+        bar = js.document.createElement("span")
+        bar.className = "ix-queue-bar"
+        bar.id = f"bar-{tab_id}-{transfer_id}"
+        track.appendChild(bar)
+        row.appendChild(track)
+
+        status = js.document.createElement("span")
+        status.className = "ix-queue-status"
+        status.id = f"st-{tab_id}-{transfer_id}"
+        status.textContent = "starting…"
+        row.appendChild(status)
+
+        stop = js.document.createElement("button")
+        stop.type = "button"
+        stop.className = "ix-queue-cancel"
+        stop.textContent = "×"
+        stop.title = "Cancel"
+        stop.addEventListener(
+            "click", create_proxy(lambda _e: filetransfer.cancel(transfer_id))
+        )
+        row.appendChild(stop)
+
+        rows.appendChild(row)
+        return transfer_id
+
+    def _queue_progress(self, tab_id: str, transfer_id: str):
+        def _update(seen: int, total: int) -> None:
+            bar = js.document.getElementById(f"bar-{tab_id}-{transfer_id}")
+            status = js.document.getElementById(f"st-{tab_id}-{transfer_id}")
+            if total:
+                pct = max(0, min(100, int(seen * 100 / total)))
+                if bar:
+                    bar.style.width = f"{pct}%"
+                if status:
+                    status.textContent = f"{pct}%  {format_size(seen)}"
+            elif status:
+                # No Content-Length: report bytes moved instead of a percentage.
+                status.textContent = format_size(seen)
+
+        return _update
+
+    def _queue_finish(
+        self, tab_id: str, transfer_id: str, state: str, detail: str = ""
+    ) -> None:
+        row = js.document.getElementById(f"{tab_id}-{transfer_id}")
+        bar = js.document.getElementById(f"bar-{tab_id}-{transfer_id}")
+        status = js.document.getElementById(f"st-{tab_id}-{transfer_id}")
+        if row:
+            row.dataset.state = state
+        if bar and state == "done":
+            bar.style.width = "100%"
+        if status:
+            status.textContent = detail or state
+            if detail:
+                status.title = detail
+
+    def _queue_clear_finished(self, tab_id: str) -> None:
+        rows = js.document.getElementById(f"queue-rows-{tab_id}")
+        holder = js.document.getElementById(f"queue-{tab_id}")
+        if not rows:
+            return
+        for row in list(rows.children):
+            if row.dataset.state:
+                row.remove()
+        if holder and rows.children.length == 0:
+            holder.hidden = True
 
     async def _sftp_delete(self, tab_id: str, paths: list) -> None:
         entry = self._sftp_tabs.get(tab_id)
@@ -985,6 +1310,47 @@ _TOOLBAR_CSS = """
 
 _SFTP_CSS = """
 .ix-sftp{display:flex;flex-direction:column;height:100%;min-height:0;}
+.ix-sftp-bar{display:flex;align-items:center;gap:4px;padding:6px 8px;
+  background:#111827;border-bottom:1px solid #1f2937;}
+.ix-sftp-btn{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;
+  color:#cbd5f5;background:transparent;border:1px solid transparent;border-radius:6px;
+  cursor:pointer;font:12px system-ui,sans-serif;}
+.ix-sftp-btn:hover{background:#1f2937;border-color:#334155;}
+.ix-sftp-btn .mdi{font-size:15px;}
+.ix-sftp-sep{width:1px;height:18px;margin:0 5px;background:#334155;}
+.ix-sftp-spacer{flex:1 1 auto;}
+.ix-sftp-note{color:#fbbf24;font:11px system-ui,sans-serif;padding-right:6px;
+  max-width:46ch;text-align:right;line-height:1.3;}
+.ix-queue{flex:0 0 auto;max-height:210px;display:flex;flex-direction:column;
+  background:#0f172a;border-top:1px solid #1f2937;}
+.ix-queue[hidden]{display:none;}
+.ix-queue-head{display:flex;align-items:center;justify-content:space-between;
+  padding:5px 10px;border-bottom:1px solid #1f2937;}
+.ix-queue-title{font:600 11px system-ui,sans-serif;color:#94a3b8;
+  letter-spacing:.04em;text-transform:uppercase;}
+.ix-queue-clear{padding:2px 8px;color:#94a3b8;background:transparent;border:none;
+  border-radius:4px;cursor:pointer;font:11px system-ui,sans-serif;}
+.ix-queue-clear:hover{background:#1f2937;color:#cbd5f5;}
+.ix-queue-rows{overflow:auto;min-height:0;}
+.ix-queue-row{display:flex;align-items:center;gap:8px;padding:5px 10px;
+  font:12px system-ui,sans-serif;color:#cbd5f5;}
+.ix-queue-row .mdi{font-size:14px;opacity:.7;flex:0 0 auto;}
+.ix-queue-name{flex:0 1 240px;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;}
+.ix-queue-track{flex:1 1 auto;height:5px;min-width:60px;border-radius:3px;
+  background:#1e293b;overflow:hidden;}
+.ix-queue-bar{display:block;height:100%;width:0;border-radius:3px;background:#38bdf8;
+  transition:width .15s linear;}
+.ix-queue-status{flex:0 0 auto;min-width:96px;text-align:right;color:#94a3b8;
+  font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ix-queue-cancel{flex:0 0 auto;width:20px;height:20px;padding:0;color:#94a3b8;
+  background:transparent;border:none;border-radius:4px;cursor:pointer;font-size:14px;}
+.ix-queue-cancel:hover{background:#1f2937;color:#f87171;}
+.ix-queue-row[data-state] .ix-queue-cancel{visibility:hidden;}
+.ix-queue-row[data-state="done"] .ix-queue-bar{background:#34d399;}
+.ix-queue-row[data-state="failed"] .ix-queue-bar{background:#f87171;}
+.ix-queue-row[data-state="failed"] .ix-queue-status{color:#f87171;}
+.ix-queue-row[data-state="cancelled"]{opacity:.55;}
 .ix-crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:2px;padding:6px 8px;
   background:#111827;border-bottom:1px solid #1f2937;}
 .ix-crumb{padding:3px 8px;color:#cbd5f5;background:transparent;border:none;

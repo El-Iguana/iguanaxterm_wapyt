@@ -20,7 +20,8 @@ GANXTERM_DATA_DIR=/tmp/ixsmoke GANXTERM_ADMIN_PASS=testpass123 PORT=8799 \
   uv run python service.py &
 
 # 3. log in once and save a profile pointing at the container, then:
-python3 tests/smoke/live_ssh_smoke.py
+python3 tests/smoke/live_ssh_smoke.py     # terminal + SFTP browsing
+python3 tests/smoke/transfer_smoke.py    # download + upload + queue
 
 # 4. tear down
 podman rm -f ix-sshtest && rm -rf /tmp/ixsmoke
@@ -28,6 +29,13 @@ podman rm -f ix-sshtest && rm -rf /tmp/ixsmoke
 
 The session profile it expects is named `alpine-box` in folder `Lab`, pointing
 at `127.0.0.1:2222` as `testuser`/`testpass`.
+
+`transfer_smoke.py` stubs `showSaveFilePicker` / `showDirectoryPicker` with
+in-memory handles, because Playwright cannot drive Chromium's native pickers.
+Everything on our side of that boundary is still exercised — activation
+ordering, streaming, progress, the queue, the routes — and the stub returns a
+real `WritableStream`, since `response.body.pipeTo()` rejects anything else and
+the genuine `FileSystemWritableFileStream` is one.
 
 ## Notes
 

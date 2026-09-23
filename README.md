@@ -8,7 +8,7 @@ connections from a single web UI — no client software required.
 
 ![IguanaXterm](appcode/static/el_iguana.png)
 
-Version 2 is a rewrite onto [pytincture](https://github.com/schapman1974/pytincture)
+Version 2 is a rewrite onto [pytincture](https://github.com/pytincture/pytincture)
 and the [wapyt](../wa_pytincture_widgetset) widgetset: the UI is Python running
 in the browser under Pyodide instead of 1,350 lines of hand-written JavaScript,
 and the hand-rolled REST API and token store are replaced by pytincture's
@@ -28,6 +28,16 @@ backend-for-frontend layer.
 - **Any key type** — RSA, Ed25519, ECDSA, with passphrase support
 - **Multi-user** — private session libraries, plus an admin panel
 - **Encrypted at rest** — SSH passwords and private keys under Fernet (AES-128)
+
+## Planned
+
+- **Tiled panes via [GridStack](https://gridstackjs.com/#demo)** — drag and
+  resize terminals and file browsers into a grid instead of stacking them in
+  tabs, so several sessions stay visible at once. Layouts save per user.
+  Wanted as a wapyt widget so any pytincture app can use it; GridStack is MIT
+  and would be vendored and served same-origin like xterm, since pytincture's
+  CSP blocks CDNs.
+- **Transfer resume** — HTTP range requests for interrupted downloads.
 
 ## Stack
 

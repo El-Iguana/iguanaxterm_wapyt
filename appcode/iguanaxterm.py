@@ -87,6 +87,18 @@ _TOOLBAR_BUTTONS = (
 )
 
 
+def _csrf_token() -> str:
+    """
+    pytincture's CSRF cookie. Readable from script on purpose — echoing it back
+    in a header is what makes it a CSRF defence.
+    """
+    for part in str(js.document.cookie).split(";"):
+        name, _, value = part.strip().partition("=")
+        if "csrf" in name.lower():
+            return str(js.decodeURIComponent(value))
+    return ""
+
+
 def _report(label: str) -> None:
     """
     Surface a failure from a fire-and-forget coroutine.
@@ -195,15 +207,17 @@ class IguanaXterm(MainWindow):
         self.tree.on_action(self._on_tree_action)
 
         self.tabs = TabWidget(
-            TabWidgetConfig(
-                tabs=[TabConfig(id="welcome", title="Welcome", icon="mdi-home")],
-                active="welcome",
-            ),
+            TabWidgetConfig(tabs=[]),
             container=body.get_cell("workspace"),
         )
         self.tabs.on_change(self._on_tab_change)
         self.tabs.on_close(self._on_tab_close)
-        self.tabs.attach_html("welcome", self._welcome_html())
+
+        # The hint lives on the empty panel area rather than in a placeholder
+        # tab, so it comes back on its own when the last tab is closed.
+        hint = js.document.createElement("style")
+        hint.textContent = _WORKSPACE_CSS
+        js.document.head.appendChild(hint)
 
     def _toolbar_html(self) -> str:
         parts = ['<div class="ix-toolbar">']
@@ -217,6 +231,11 @@ class IguanaXterm(MainWindow):
             )
         parts.append('<span class="ix-toolbar-spacer"></span>')
         parts.append('<span class="ix-toolbar-user" id="ix-user"></span>')
+        parts.append(
+            '<button type="button" class="ix-toolbar-btn" data-action="logout" '
+            'title="Sign out">'
+            '<span class="mdi mdi-logout"></span><span>Logout</span></button>'
+        )
         parts.append("</div>")
         parts.append(f"<style>{_TOOLBAR_CSS}</style>")
         return "".join(parts)
@@ -238,16 +257,6 @@ class IguanaXterm(MainWindow):
 
         self._toolbar_proxy = create_proxy(_on_click)
         js.document.addEventListener("click", self._toolbar_proxy)
-
-    @staticmethod
-    def _welcome_html() -> str:
-        return (
-            '<div style="display:flex;flex-direction:column;align-items:center;'
-            'justify-content:center;height:100%;gap:10px;color:#94a3b8;'
-            'font:14px system-ui,sans-serif;">'
-            '<span class="mdi mdi-console" style="font-size:44px;opacity:.5"></span>'
-            "<div>Double-click a session to open a terminal.</div></div>"
-        )
 
     # ------------------------------------------------------------------
     # Identity and session list
@@ -337,7 +346,9 @@ class IguanaXterm(MainWindow):
             _spawn(self._forget_host_key(session_id), "forget host key")
 
     def _on_toolbar(self, action: str) -> None:
-        if action == "new":
+        if action == "logout":
+            _spawn(self._logout(), "logout")
+        elif action == "new":
             _spawn(self._session_editor(None), "session editor")
         elif action == "users":
             _spawn(self._admin_panel(), "admin panel")
@@ -357,6 +368,40 @@ class IguanaXterm(MainWindow):
     # ------------------------------------------------------------------
     # Terminals
     # ------------------------------------------------------------------
+
+    async def _logout(self) -> None:
+        """
+        End the session and return to the login page.
+
+        pytincture's logout is a POST that validates the CSRF header, so a link
+        or a form submit cannot do it — the token has to travel in
+        X-CSRF-Token, which only fetch can set. The cookie is deliberately not
+        HttpOnly so the page can read it back.
+        """
+        open_terminals = len(self._terminals)
+        if open_terminals and not js.confirm(
+            f"Sign out and close {open_terminals} open terminal(s)?"
+        ):
+            return
+
+        application = str(js.window.location.pathname).strip("/").split("/")[0]
+        options = js.Object.new()
+        options.method = "POST"
+        options.credentials = "same-origin"
+        headers = js.Object.new()
+        setattr(headers, "X-CSRF-Token", _csrf_token())
+        options.headers = headers
+
+        try:
+            response = await js.fetch(f"/{application}/auth/logout", options)
+        except Exception:
+            self._toast("Could not sign out.")
+            return
+        if not response.ok:
+            self._toast("Could not sign out.")
+            return
+
+        js.window.location.assign(f"/{application}/login")
 
     def _connect(self, node_id: str | None) -> None:
         if not node_id or not str(node_id).startswith("sess_"):
@@ -1328,6 +1373,17 @@ class IguanaXterm(MainWindow):
             create_proxy(lambda: holder.removeAttribute("data-visible")), 4000
         )
 
+
+_WORKSPACE_CSS = """
+/* :empty matches when the tab strip holds no panels — pseudo-elements do not
+   count as children — so the hint appears with no state to track. */
+.wapyt-tabwidget-panels:empty::after{
+  content:"Double-click a session in the sidebar to open a terminal.";
+  display:flex;align-items:center;justify-content:center;height:100%;
+  color:#64748b;font:14px system-ui,sans-serif;text-align:center;padding:0 24px;
+}
+.wapyt-tabwidget-tabs:empty{display:none;}
+"""
 
 _TOOLBAR_CSS = """
 .ix-toolbar{display:flex;align-items:center;gap:4px;padding:6px 10px;height:100%;

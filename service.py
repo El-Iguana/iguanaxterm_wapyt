@@ -198,6 +198,16 @@ def build_app():
         "/xterm", StaticFiles(directory=str(APPCODE / "vendor" / "xterm")), name="xterm"
     )
 
+    # GridStack, vendored for the same CSP reason and loaded on demand the
+    # first time the workspace is tiled. It lives here rather than in wapyt
+    # because the widgetset's manifest loads every asset on every page, for
+    # every app, and only this one tiles.
+    application.mount(
+        "/gridstack",
+        StaticFiles(directory=str(APPCODE / "vendor" / "gridstack")),
+        name="gridstack",
+    )
+
     # Application artwork. Same-origin for the same CSP reason as xterm:
     # img-src allows https:, but keeping it local means the branding still
     # renders on an air-gapped deployment.

@@ -142,6 +142,9 @@ class IguanaXterm(MainWindow):
         self._crumb_observers: dict = {}
         self._sftp_tabs: dict[str, dict] = {}   # pane id -> {table, session_id, path}
         self._tab_counter = 0
+        self._mode = "tabbed"      # or "tiled"
+        self._grid = None          # the GridStack instance, once loaded
+        self._grid_proxies: list = []
         self._me: dict = {}
 
         self._build_chrome()
@@ -211,9 +214,27 @@ class IguanaXterm(MainWindow):
         self.tree.on_activate(lambda payload: self._connect(payload.get("id")))
         self.tree.on_action(self._on_tree_action)
 
+        # Two hosts, one workspace. The TabWidget always holds a tab per pane
+        # and is the source of truth for which panes exist; the grid mirrors it
+        # while tiled. Switching modes moves pane roots between them and
+        # nothing else, which is safe because a reparented xterm keeps its
+        # buffer (tests/smoke/reparent_spike.py).
+        workspace = body.get_cell("workspace")
+        workspace_el = (
+            workspace.getContainer() if hasattr(workspace, "getContainer") else workspace
+        )
+        workspace_el.innerHTML = (
+            '<div class="ix-workspace">'
+            '  <div class="ix-host" id="ix-tabs-host"></div>'
+            '  <div class="ix-host" id="ix-grid-host" hidden>'
+            '    <div class="grid-stack"></div>'
+            '  </div>'
+            "</div>"
+        )
+
         self.tabs = TabWidget(
             TabWidgetConfig(tabs=[]),
-            container=body.get_cell("workspace"),
+            container=js.document.getElementById("ix-tabs-host"),
         )
         self.tabs.on_change(self._on_tab_change)
         self.tabs.on_close(self._on_tab_close)
@@ -222,7 +243,7 @@ class IguanaXterm(MainWindow):
         # tab, so it comes back on its own when the last tab is closed. The pane
         # and SFTP rules go up once here rather than with every pane built.
         hint = js.document.createElement("style")
-        hint.textContent = _WORKSPACE_CSS + _PANE_CSS + _SFTP_CSS
+        hint.textContent = _WORKSPACE_CSS + _GRID_CSS + _PANE_CSS + _SFTP_CSS
         js.document.head.appendChild(hint)
 
     def _toolbar_html(self) -> str:
@@ -236,6 +257,16 @@ class IguanaXterm(MainWindow):
                 f'<span class="mdi {icon}"></span><span>{label}</span></button>'
             )
         parts.append('<span class="ix-toolbar-spacer"></span>')
+        parts.append(
+            '<span class="ix-mode-switch" role="group" aria-label="Workspace layout">'
+            '<button type="button" class="ix-mode-btn" data-mode="tabbed" '
+            'aria-selected="true" title="One connection at a time, in tabs">'
+            '<span class="mdi mdi-table-row"></span></button>'
+            '<button type="button" class="ix-mode-btn" data-mode="tiled" '
+            'aria-selected="false" title="Tile connections in a resizable grid">'
+            '<span class="mdi mdi-view-grid"></span></button>'
+            '</span>'
+        )
         parts.append('<span class="ix-toolbar-user" id="ix-user"></span>')
         parts.append(
             '<button type="button" class="ix-toolbar-btn" data-action="logout" '
@@ -265,6 +296,16 @@ class IguanaXterm(MainWindow):
             pane_tab = event.target.closest("[data-pane-tab]")
             if pane_tab:
                 self._pane_select(pane_tab.dataset.pane, pane_tab.dataset.paneTab)
+                return
+
+            closer = event.target.closest("[data-pane-close]")
+            if closer:
+                self._close_pane(closer.dataset.paneClose)
+                return
+
+            mode_button = event.target.closest("[data-mode]")
+            if mode_button:
+                self._set_mode(mode_button.dataset.mode)
 
         self._toolbar_proxy = create_proxy(_on_click)
         js.document.addEventListener("click", self._toolbar_proxy)
@@ -457,6 +498,10 @@ class IguanaXterm(MainWindow):
                 theme=TERMINAL_THEME,
                 search=True,
                 reconnect=True,
+                # A tile can be dragged, and every frame that crosses a column
+                # boundary is a TIOCSWINSZ on the remote: one measured 1.3s
+                # drag sent 41 of them. Wait for the drag to settle instead.
+                fit_debounce_ms=120,
             ),
             container=js.document.getElementById(f"pane-term-{pane_id}"),
         )
@@ -472,6 +517,8 @@ class IguanaXterm(MainWindow):
         }
 
         self.tabs.set_active(pane_id)
+        if self._mode == "tiled":
+            self._attach_to_grid(pane_id)
         if focus == "files":
             self._pane_select(pane_id, "files")
         return pane_id
@@ -497,6 +544,7 @@ class IguanaXterm(MainWindow):
         return (
             f'<div class="ix-pane" data-pane="{pane_id}">'
             f'  <div class="ix-pane-tabs">'
+            f'    <span class="ix-pane-grip mdi mdi-drag-vertical" title="Drag to move"></span>'
             f'    <button type="button" class="ix-pane-tab" data-pane-tab="terminal"'
             f'            data-pane="{pane_id}" aria-selected="true">'
             f'      <span class="mdi mdi-console-line"></span><span>Terminal</span></button>'
@@ -505,6 +553,8 @@ class IguanaXterm(MainWindow):
             f'      <span class="mdi mdi-folder-network"></span><span>Files</span></button>'
             f'    <span class="ix-pane-spacer"></span>'
             f'    <span class="ix-pane-host" title="{label}">{label}</span>'
+            f'    <button type="button" class="ix-pane-close" data-pane-close="{pane_id}"'
+            f'            title="Close this connection">&times;</button>'
             f'  </div>'
             f'  <div class="ix-pane-body">'
             f'    <div class="ix-pane-panel" data-panel="terminal" id="pane-term-{pane_id}"></div>'
@@ -626,6 +676,7 @@ class IguanaXterm(MainWindow):
         observer = self._crumb_observers.pop(pane_id, None)
         if observer is not None:
             observer.disconnect()
+        self._remove_grid_item(pane_id)
         if pane.get("sftp_held"):
             # Drops this pane's hold only. Another pane on the same host keeps
             # the channel alive.
@@ -633,6 +684,166 @@ class IguanaXterm(MainWindow):
                 SFTPService().disconnect_async(pane["session_id"]),
                 "sftp release",
             )
+
+    # ------------------------------------------------------------------
+    # Workspace mode: tabbed or tiled
+    # ------------------------------------------------------------------
+
+    async def _load_asset(self, tag: str, attrs: dict) -> bool:
+        """Append a <script>/<link> and wait for it, without blocking the loop."""
+        future = asyncio.get_event_loop().create_future()
+        element = js.document.createElement(tag)
+        for name, value in attrs.items():
+            setattr(element, name, value)
+
+        def _settle(ok: bool):
+            def _handler(*_args) -> None:
+                if not future.done():
+                    future.set_result(ok)
+            return create_proxy(_handler)
+
+        element.addEventListener("load", _settle(True))
+        element.addEventListener("error", _settle(False))
+        js.document.head.appendChild(element)
+        return await future
+
+    async def _ensure_gridstack(self) -> bool:
+        """
+        Load the vendored GridStack the first time it is needed.
+
+        Deferred rather than loaded at boot: someone who never tiles never pays
+        for the 92KB, and the tabbed workspace is the default.
+        """
+        if getattr(js.window, "GridStack", None):
+            return True
+        await self._load_asset(
+            "link", {"rel": "stylesheet", "href": "/gridstack/gridstack.min.css"}
+        )
+        loaded = await self._load_asset("script", {"src": "/gridstack/gridstack-all.js"})
+        if not loaded or not getattr(js.window, "GridStack", None):
+            self._toast("Could not load the tiling library.")
+            return False
+        return True
+
+    def _set_mode(self, mode: str) -> None:
+        if mode == self._mode or mode not in ("tabbed", "tiled"):
+            return
+        if mode == "tiled":
+            _spawn(self._go_tiled(), "workspace tile")
+        else:
+            self._go_tabbed()
+
+    async def _go_tiled(self) -> None:
+        if not await self._ensure_gridstack():
+            return
+        if self._mode == "tiled":
+            return
+
+        js.document.getElementById("ix-tabs-host").hidden = True
+        js.document.getElementById("ix-grid-host").hidden = False
+
+        if self._grid is None:
+            options = js.Object.new()
+            options.column = 12
+            options.cellHeight = 56
+            options.margin = 6
+            options.float = False
+            options.animate = False
+            # Only the grip drags. The strip also holds the Terminal/Files
+            # buttons, and a drag starting on one of those would eat the click.
+            handle = js.Object.new()
+            handle.handle = ".ix-pane-grip"
+            options.draggable = handle
+            self._grid = js.GridStack.init(
+                options, js.document.querySelector("#ix-grid-host .grid-stack")
+            )
+            # Fitting during the drag is wasted work; the pane is mid-flight and
+            # every intermediate size is thrown away.
+            for event in ("resizestop", "dragstop", "change"):
+                proxy = create_proxy(lambda *_args: self._fit_visible_panes())
+                self._grid_proxies.append(proxy)
+                self._grid.on(event, proxy)
+
+        self._mode = "tiled"
+        for pane_id in list(self._panes):
+            self._attach_to_grid(pane_id)
+        self._sync_mode_buttons()
+        self._fit_visible_panes()
+
+    def _go_tabbed(self) -> None:
+        for pane_id in list(self._panes):
+            root = js.document.querySelector(f'.ix-pane[data-pane="{pane_id}"]')
+            cell = self.tabs.get_cell(pane_id)
+            target = cell.getContainer() if hasattr(cell, "getContainer") else cell
+            if root and target:
+                target.appendChild(root)
+            self._remove_grid_item(pane_id)
+
+        js.document.getElementById("ix-grid-host").hidden = True
+        js.document.getElementById("ix-tabs-host").hidden = False
+        self._mode = "tabbed"
+        self._sync_mode_buttons()
+        self._fit_visible_panes()
+
+    def _close_pane(self, pane_id: str) -> None:
+        """
+        Close from the pane's own button.
+
+        The TabWidget emits `close` from its close button, not from
+        removeTab, so the teardown has to be called directly or a tiled close
+        would leak the terminal and its socket.
+        """
+        self._on_tab_close({"id": pane_id})
+        self.tabs.remove_tab(pane_id)
+
+    def _attach_to_grid(self, pane_id: str) -> None:
+        """Give a pane a grid item and move its root inside it."""
+        if self._grid is None:
+            return
+        root = js.document.querySelector(f'.ix-pane[data-pane="{pane_id}"]')
+        if not root:
+            return
+
+        widget = js.document.createElement("div")
+        widget.className = "grid-stack-item"
+        widget.setAttribute("gs-w", "6")
+        widget.setAttribute("gs-h", "7")
+        widget.dataset.pane = pane_id
+        content = js.document.createElement("div")
+        content.className = "grid-stack-item-content"
+        widget.appendChild(content)
+
+        # Move the pane root in first, then hand the finished element to
+        # GridStack. `addWidget(HTMLElement)` was dropped in v11 — it warns and
+        # builds its own element, which would leave this pane in a detached
+        # node. `makeWidget` adopts an element that is already in the grid.
+        content.appendChild(root)
+        js.document.querySelector("#ix-grid-host .grid-stack").appendChild(widget)
+        self._grid.makeWidget(widget)
+
+    def _remove_grid_item(self, pane_id: str) -> None:
+        if self._grid is None:
+            return
+        item = js.document.querySelector(
+            f'#ix-grid-host .grid-stack-item[data-pane="{pane_id}"]'
+        )
+        if item:
+            # removeDOM, but the pane root has already been moved out by the
+            # caller when switching modes.
+            self._grid.removeWidget(item, True)
+
+    def _fit_visible_panes(self) -> None:
+        for pane_id, pane in self._panes.items():
+            if pane["tab"] == "terminal":
+                pane["terminal"].fit()
+
+    def _sync_mode_buttons(self) -> None:
+        for mode in ("tiled", "tabbed"):
+            button = js.document.querySelector(f'[data-mode="{mode}"]')
+            if button:
+                button.setAttribute(
+                    "aria-selected", "true" if mode == self._mode else "false"
+                )
 
     # ------------------------------------------------------------------
     # SFTP
@@ -1577,6 +1788,38 @@ _SIDEBAR_CSS = """
 .ix-brand-sub{font:10.5px system-ui,sans-serif;color:#64748b;letter-spacing:.03em;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .ix-sidebar-tree{flex:1 1 auto;min-height:0;}
+"""
+
+_GRID_CSS = """
+.ix-workspace{position:relative;height:100%;min-height:0;}
+.ix-host{position:absolute;inset:0;min-height:0;}
+.ix-host[hidden]{display:none;}
+#ix-grid-host{overflow:auto;background:#0b1220;}
+#ix-grid-host .grid-stack{min-height:100%;}
+/* The item content is the pane's parent, so it needs the same min-height:0
+   discipline as a layout cell or a terminal pushes it wider than its cell. */
+.grid-stack-item-content{display:flex;flex-direction:column;min-width:0;
+  min-height:0;overflow:hidden;background:#0f172a;border:1px solid #1f2937;
+  border-radius:8px;}
+.grid-stack-item-content .ix-pane{height:100%;}
+/* Grip and close only mean anything while tiled: in tabbed mode the tab strip
+   already moves and closes a pane. */
+.ix-pane-grip,.ix-pane-close{display:none;}
+.grid-stack .ix-pane-grip{display:inline-flex;align-items:center;color:#475569;
+  cursor:move;font-size:16px;padding:0 2px;}
+.grid-stack .ix-pane-grip:hover{color:#94a3b8;}
+.grid-stack .ix-pane-close{display:inline-flex;align-items:center;
+  justify-content:center;width:20px;height:20px;padding:0;color:#64748b;
+  background:transparent;border:none;border-radius:4px;cursor:pointer;
+  font-size:16px;line-height:1;}
+.grid-stack .ix-pane-close:hover{background:#7f1d1d;color:#fecaca;}
+.ix-mode-switch{display:inline-flex;gap:2px;margin-right:10px;padding:2px;
+  background:#0b1220;border:1px solid #1f2937;border-radius:7px;}
+.ix-mode-btn{display:inline-flex;align-items:center;justify-content:center;
+  width:28px;height:24px;padding:0;color:#64748b;background:transparent;
+  border:none;border-radius:5px;cursor:pointer;font-size:15px;}
+.ix-mode-btn:hover{color:#cbd5f5;background:#1f2937;}
+.ix-mode-btn[aria-selected="true"]{color:#e2e8f0;background:#1e293b;}
 """
 
 _PANE_CSS = """

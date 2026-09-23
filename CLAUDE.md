@@ -213,6 +213,39 @@ decided 2026-09-23; not built yet.
   a Reconnect button. Auto-dialling N sessions on page load walks straight into
   the `MaxStartups` banner resets that `ssh.py`'s retry exists to survive.
 
+### Phase 3 is built (2026-09-23)
+
+GridStack **14.0.0** is vendored at `appcode/vendor/gridstack/` and served from
+`/gridstack` (`service.py`), mirroring xterm. It is loaded **on demand** the
+first time the workspace is tiled, so nobody pays 92KB for a mode they never
+use. The `sourceMappingURL` comment is stripped: the `.map` is not vendored.
+
+The workspace holds two hosts, `#ix-tabs-host` and `#ix-grid-host`. The
+TabWidget always keeps a tab per pane and is the source of truth for which
+panes exist; the grid mirrors it while tiled. Switching modes moves pane roots
+and nothing else.
+
+Traps found building it:
+
+- **`addWidget(HTMLElement)` was removed in GridStack v11.** It warns and
+  quietly builds its own element instead, which left the pane in a detached
+  node — the tile *rendered*, so it looked fine, but typing into it did
+  nothing. Build the item, move the pane root in, append it to `.grid-stack`,
+  then `makeWidget(el)`.
+- **The drag handle must be a dedicated grip.** The pane's tab strip holds the
+  Terminal/Files buttons, and making the strip the handle eats their clicks.
+  `draggable: {handle: ".ix-pane-grip"}`.
+- **A tiled pane needs its own close button**, since the tab strip is hidden.
+  The TabWidget emits `close` from its close button, *not* from `removeTab`, so
+  closing from the pane must call the teardown directly or the terminal and its
+  socket leak.
+- **The resize handle is `.ui-resizable-se` and carries
+  `ui-resizable-autohide`** — no bounding box until hover, which reads as "the
+  handle does not exist" in a test.
+- **A resize drag floods the PTY.** Measured: one 1.3s drag sent **41** resize
+  messages, all 41 distinct, so `fit()`'s cols/rows dedupe never engaged.
+  `fit_debounce_ms=120` (new in wapyt) brings it to **1**.
+
 ### Phase 1 is built (2026-09-23)
 
 The Pane abstraction and the pool refcounting are in, hosted by the existing
@@ -296,10 +329,9 @@ tab inside the connection's own pane.
   `ResizeObserver` re-pinning `scrollLeft` to its tail. Scrolling to the end on
   navigation alone is not enough — a resize keeps the old offset and leaves the
   middle of the path showing, which a grid drag would do continuously.
-- **Resize storms need a widgetset change.** `terminal.js` already suppresses
-  redundant PTY messages when cols/rows are unchanged, but its `ResizeObserver`
-  fires per frame during a drag and an app cannot intercept it. wapyt needs a
-  `fit_debounce_ms` option (~120ms).
+- **Resize storms are handled** by `fit_debounce_ms` (wapyt), set to 120 here.
+  See the measurement above. An explicit `fit()` is never debounced, so a pane
+  becoming visible still fits immediately.
 - **Grid items need `min-height: 0`**, the same discipline as the layout cell
   fix above. Without it a terminal pushes its item wider instead of scrolling —
   the 81px-pane / 20-column bug again.

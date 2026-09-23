@@ -57,6 +57,32 @@ after a correct `release()`. The refcount is pinned by the unit tests in
 `tests/test_sftp_pool.py` instead, and the damage it prevents is an in-flight
 transfer dying, not a later listing.
 
+## Tiled smoke
+
+`tiled_smoke.py` covers the tiled workspace: both panes get grid items, pane
+roots move into them, grips and close buttons appear only while tiled, tiles
+lay out side by side, and — the part that matters — every scrollback survives
+the switch there and back, with the PTY re-negotiated to the tile width.
+
+```bash
+python3 tests/smoke/tiled_smoke.py
+```
+
+## Resize storm probe
+
+`resize_storm_probe.py` counts PTY resize frames during one real drag of a
+tile's resize handle. It is a measurement, not a pass/fail test — run it after
+touching `fit_debounce_ms`, the grid options or `terminal.js`'s observer.
+
+```
+before the debounce: 41 messages, 41 distinct sizes, over 1327ms
+after  (120ms):       1 message, at the final size
+```
+
+The handle carries `ui-resizable-autohide` and has no box until hover, so the
+probe strips that class first — worth knowing before concluding the handle is
+missing.
+
 ## Narrow pane smoke
 
 `narrow_pane_smoke.py` drives the SFTP panel at grid-cell widths from 1200px

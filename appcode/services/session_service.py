@@ -167,6 +167,13 @@ class SessionService:
                     values,
                 )
                 new_id = int(session_id)
+                # Cached channels were dialled with the old host, port and
+                # credentials. Without this they keep serving the file browser
+                # and transfers until they sit idle for five minutes.
+                from services.pool import sftp_pool, transfer_pool
+
+                sftp_pool.close(new_id)
+                transfer_pool.close(new_id)
             else:
                 cursor = conn.execute(
                     "INSERT INTO sessions "
@@ -195,9 +202,10 @@ class SessionService:
         if cursor.rowcount == 0:
             return {"ok": False, "error": "Session not found"}
 
-        from services.sftp_service import sftp_pool
+        from services.pool import sftp_pool, transfer_pool
 
         sftp_pool.close(int(session_id))
+        transfer_pool.close(int(session_id))
         return {"ok": True}
 
     def clear_host_key(self, session_id: int) -> dict:

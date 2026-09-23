@@ -169,6 +169,28 @@ def test_upload_list_download_rename_delete(server):
     assert not (server["root"] / "a").exists()
 
 
+def test_a_transfer_after_a_listing_is_still_binary(server):
+    """
+    ftplib's mlsd()/retrlines() switch the connection to TYPE A. A download or
+    upload that followed one used to run in ASCII mode, and the server
+    rewrote CR/LF bytes inside binary files.
+    """
+    payload = bytes(range(256)) * 64 + b"\r\n\n\r" * 100
+    (server["root"] / "bin.dat").write_bytes(payload)
+    client = _client(server)
+
+    client.listdir_attr("/")                      # leaves TYPE A behind
+    handle = client.open("/bin.dat", "rb")
+    assert handle.read(-1) == payload, "download was not binary after a listing"
+    handle.close()
+
+    client.listdir_attr("/")
+    handle = client.open("/up.dat", "wb")
+    handle.write(payload)
+    handle.close()
+    assert (server["root"] / "up.dat").read_bytes() == payload, "upload was not binary"
+
+
 def test_listing_waits_for_an_open_transfer(server):
     """A command during RETR must queue behind it, not interleave with it."""
     (server["root"] / "f.txt").write_bytes(b"hello")

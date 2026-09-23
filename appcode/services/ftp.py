@@ -481,6 +481,11 @@ class FTPFiles:
                 if self._ftp is None:
                     self._dial()
                 try:
+                    # Binary, every time. ftplib's mlsd() and retrlines() leave
+                    # the connection in TYPE A, and a RETR or STOR after a
+                    # listing would otherwise let the server rewrite line
+                    # endings inside a JPEG. retrbinary() does the same.
+                    self._ftp.voidcmd("TYPE I")
                     data = self._ftp.transfercmd(command)
                     break
                 except ftplib.error_perm as exc:

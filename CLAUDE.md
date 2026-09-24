@@ -286,6 +286,21 @@ module that imports `RFB` and sets `window.IxRFB`.
 - **Do not wait on a module script's `load` event from Pyodide.** It never
   reached the Python future here, even though the module ran. The loader waits
   for `window.IxRFB` instead, with a timeout, and fails fast on `error`.
+- **Clipboard, both ways.** Remote to local: noVNC's `clipboard` event, then
+  `navigator.clipboard.writeText`. If the browser insists on a click, the
+  header's **Copy from desktop** button appears (it has `[hidden]` CSS,
+  because `display:inline-flex` beats the attribute, which is the same trap as
+  the Terminal tab button). Local to remote: a capture-phase keydown on
+  `.ix-vnc` takes Ctrl/Cmd+V before noVNC's canvas listener. It reads the
+  clipboard, calls `rfb.clipboardPasteFrom`, then replays the V with
+  `rfb.sendKey`. The text and the key go down one socket in order, so the
+  remote pastes the new text. noVNC ignores the release of a key it never saw
+  go down, so nothing leaks. The server echoes what we sent; `clip_sent`
+  keeps that echo from being toasted.
+- **x11vnc will not re-send a selection identical to the last one it
+  forwarded.** A fixed test string passed once and then failed every run
+  after, which looked like flakiness for a while. `vnc_smoke.py` uses unique
+  text per run.
 - Escape is left to the remote inside `.ix-vnc`, as it is inside a terminal.
   Ctrl+Alt+Del has a header button, because the OS takes it before the page.
 

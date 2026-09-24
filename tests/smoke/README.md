@@ -105,6 +105,14 @@ must fail directly, and a wrong password must show x11vnc's own reason. The
 test also watches every request and WebSocket frame the page sends, and fails
 if the VNC password appears in any of them.
 
+The clipboard is checked both ways through `xclip` in the target (`podman
+exec`). It sets the remote `CLIPBOARD` and expects it in the page's
+clipboard. It presses Ctrl+V inside the desktop and clicks **Paste to
+desktop**, then reads the remote `CLIPBOARD` back. The remote-side text is
+unique per run, because x11vnc skips a selection identical to the last one it
+forwarded. The shell line is cleared with Ctrl+C before each typed command:
+the Ctrl+V check leaves a real ^V in the remote shell.
+
 Two lessons from the target itself. Xvfb needs `-noreset`: an X server resets
 when its last client leaves, and `xsetroot` exits as soon as it has set the
 colour. And the start script clears `/tmp/.X1-lock`, because a restarted

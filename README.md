@@ -82,6 +82,12 @@ connect or fail, so it never makes the burst that restoring avoids.
   straight to `host:port` (a trusted LAN only: VNC is unencrypted), or rides one
   of your saved SSH sessions to a desktop that listens only on that machine's
   `localhost`. Tunnelling reuses the session's key and pinned host key
+- **Clipboard both ways** — what you copy on the remote desktop lands in
+  your clipboard, and Ctrl+V inside the desktop first sends your clipboard
+  across and then pastes, so the remote app pastes what you copied here. A
+  **Paste to desktop** header button does the same explicitly (Firefox needs
+  it). Classic VNC clipboard text is Latin-1: x11vnc turns characters beyond
+  it into `?`
 - **The VNC password stays on the server** — the relay does the VNC login and
   hands the browser an already-authenticated desktop, so the password is never
   sent to the page

@@ -92,6 +92,9 @@ TERMINAL_THEME = TerminalTheme(
 _RECONNECT_WAIT_SECONDS = 15
 _RECONNECT_GAP_SECONDS = 0.3
 
+# The X keysym for "v", replayed after a Ctrl+V has put the clipboard across.
+_XK_V = 0x0076
+
 # noVNC is ~70 ES modules on first use; give a slow link time to fetch them.
 _NOVNC_LOAD_SECONDS = 30
 
@@ -356,6 +359,15 @@ class IguanaXterm(MainWindow):
             pane_tab = event.target.closest("[data-pane-tab]")
             if pane_tab:
                 self._pane_select(pane_tab.dataset.pane, pane_tab.dataset.paneTab)
+                return
+
+            clip_send = event.target.closest("[data-pane-clip-send]")
+            if clip_send:
+                _spawn(self._clipboard_to_desktop(clip_send.dataset.paneClipSend), "paste to desktop")
+                return
+            clip_take = event.target.closest("[data-pane-clip-take]")
+            if clip_take:
+                _spawn(self._clipboard_from_desktop(clip_take.dataset.paneClipTake), "copy from desktop")
                 return
 
             cad = event.target.closest("[data-pane-cad]")
@@ -810,14 +822,100 @@ class IguanaXterm(MainWindow):
             if current is not None:
                 current["refused"] = reason   # shown by the disconnect that follows
 
+        def _on_remote_clipboard(event) -> None:
+            text = str(getattr(event.detail, "text", "") or "")
+            current = self._panes.get(pane_id)
+            if current is None or not text:
+                return
+            current["clip_pending"] = text
+            _spawn(self._clipboard_from_desktop(pane_id, automatic=True), "desktop clipboard")
+
         for name, handler in (
             ("connect", _on_connect),
             ("disconnect", _on_disconnect),
             ("securityfailure", _on_security_failure),
+            ("clipboard", _on_remote_clipboard),
         ):
             proxy = create_proxy(handler)
             pane.setdefault("proxies", []).append(proxy)
             rfb.addEventListener(name, proxy)
+
+        def _on_key(event) -> None:
+            # Ctrl+V (Cmd+V on a Mac) inside the desktop: first hand the remote
+            # this computer's clipboard, then pass the V on, so the remote app
+            # pastes what was copied *here*. Caught in the capture phase, before
+            # noVNC's own listener on its canvas; noVNC then never sees this V
+            # go down, so it also ignores its release.
+            if event.code != "KeyV" or event.altKey or not (event.ctrlKey or event.metaKey):
+                return
+            event.preventDefault()
+            event.stopPropagation()
+            _spawn(self._clipboard_to_desktop(pane_id, then_paste=True), "desktop paste")
+
+        key_proxy = create_proxy(_on_key)
+        pane.setdefault("proxies", []).append(key_proxy)
+        screen.addEventListener("keydown", key_proxy, True)
+
+    async def _clipboard_to_desktop(self, pane_id: str, then_paste: bool = False) -> None:
+        """
+        Put this computer's clipboard on the remote desktop's clipboard.
+
+        With ``then_paste`` (Ctrl+V inside the desktop) the V is replayed after
+        it: the text and the keystroke go down the same socket in order, so the
+        remote app pastes the new text, never the old. Reading the clipboard
+        may ask the person once; if the browser refuses, the keystroke still
+        goes through and pastes whatever the remote already had.
+        """
+        pane = self._panes.get(pane_id)
+        rfb = pane.get("rfb") if pane else None
+        if rfb is None:
+            return
+        text = None
+        try:
+            text = str(await js.navigator.clipboard.readText())
+        except Exception:
+            if not pane.get("clip_warned"):
+                pane["clip_warned"] = True
+                self._toast(
+                    "The browser did not share its clipboard. Allow clipboard access "
+                    "for this site to paste into the desktop."
+                )
+        if text:
+            rfb.clipboardPasteFrom(text)
+            pane["clip_sent"] = text
+        if then_paste:
+            rfb.sendKey(_XK_V, "KeyV")
+        elif text:
+            self._toast("Sent to the desktop's clipboard. Paste there as usual.")
+        rfb.focus()
+
+    async def _clipboard_from_desktop(self, pane_id: str, automatic: bool = False) -> None:
+        """
+        Take what the remote desktop copied into this computer's clipboard.
+
+        Tried as soon as the desktop copies. A browser that insists on a click
+        for clipboard writes gets the header's Copy from desktop button instead,
+        which is that click.
+        """
+        pane = self._panes.get(pane_id)
+        text = pane.get("clip_pending") if pane else None
+        button = js.document.querySelector(f'[data-pane-clip-take="{pane_id}"]')
+        if not text:
+            return
+        try:
+            await js.navigator.clipboard.writeText(text)
+        except Exception:
+            if button:
+                button.hidden = False
+            if not automatic:
+                self._toast("The browser refused to write the clipboard.")
+            return
+        pane["clip_pending"] = None
+        if button:
+            button.hidden = True
+        # The server echoes back what we just sent it; that is not news.
+        if text != pane.get("clip_sent"):
+            self._toast(f"Copied {len(text)} characters from the desktop.")
 
     def _show_reconnect(self, pane_id: str, session: dict) -> None:
         """
@@ -880,7 +978,16 @@ class IguanaXterm(MainWindow):
             ("mdi-monitor", "Desktop") if caps["desktop"] else ("mdi-console-line", "Terminal")
         )
         # Ctrl+Alt+Del cannot be typed into a browser tab: the OS takes it.
+        # Clipboard: Paste sends this computer's clipboard to the desktop (Ctrl+V
+        # inside it does the same and then pastes); Copy appears only when the
+        # desktop copied something the browser would not let us take unasked.
         cad = (
+            f'    <button type="button" class="ix-pane-cad" data-pane-clip-send="{pane_id}"'
+            f'            title="Send this computer\'s clipboard to the remote desktop">'
+            f'      <span class="mdi mdi-clipboard-arrow-right-outline"></span><span>Paste to desktop</span></button>'
+            f'    <button type="button" class="ix-pane-cad" data-pane-clip-take="{pane_id}" hidden'
+            f'            title="The remote desktop copied something; take it into this computer\'s clipboard">'
+            f'      <span class="mdi mdi-clipboard-arrow-left-outline"></span><span>Copy from desktop</span></button>'
             f'    <button type="button" class="ix-pane-cad" data-pane-cad="{pane_id}"'
             f'            title="Send Ctrl+Alt+Del to the remote desktop">'
             f'      <span class="mdi mdi-keyboard-variant"></span><span>Ctrl+Alt+Del</span></button>'
@@ -2691,6 +2798,8 @@ _PANE_CSS = """
   padding:3px 9px;color:#94a3b8;background:transparent;border:1px solid #334155;
   border-radius:6px;cursor:pointer;font:11px system-ui,sans-serif;white-space:nowrap;}
 .ix-pane-cad:hover{background:#1f2937;color:#e2e8f0;}
+/* display:inline-flex above would otherwise beat the hidden attribute. */
+.ix-pane-cad[hidden]{display:none;}
 .ix-pane-cad .mdi{font-size:14px;}
 /* A narrow pane drops the tab labels to icons. */
 @container (max-width: 420px){

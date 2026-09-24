@@ -13,11 +13,13 @@
 # A restart keeps /tmp, so the start script clears Xvfb's lock first -- a stale
 # /tmp/.X1-lock makes Xvfb refuse to start and nothing after it ever runs.
 #
+# xclip lets the test set and read the remote clipboard directly (podman exec).
+#
 # The screen is two known colours so a test can check real pixels: the root
 # window is #2a6f97, and an xterm filled #f2c14e sits at (100,100).
 FROM docker.io/library/alpine:3.20
 
-RUN apk add --no-cache xvfb x11vnc xterm xsetroot font-misc-misc openssh-server shadow \
+RUN apk add --no-cache xvfb x11vnc xterm xsetroot xclip font-misc-misc openssh-server shadow \
     && ssh-keygen -A \
     && adduser -D -s /bin/sh testuser \
     && echo 'testuser:testpass' | chpasswd \

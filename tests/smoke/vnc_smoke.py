@@ -19,7 +19,12 @@ What it pins:
     SSH session, and not directly
   - a wrong password is refused with the server's own reason, and the pane
     offers Reconnect
+  - the clipboard crosses both ways: what the remote copies lands in this
+    computer's clipboard, Ctrl+V inside the desktop puts this computer's
+    clipboard on the remote's first, and so does the Paste to desktop button
 """
+import subprocess
+import time
 from playwright.sync_api import sync_playwright
 
 import sys as _sys, os as _os
@@ -30,6 +35,19 @@ from transfer_smoke import login  # noqa: E402
 PASSWORD = "vncpass"
 ROOT, XTERM, CHANGED = (0x2a, 0x6f, 0x97), (0xf2, 0xc1, 0x4e), (0x00, 0xaa, 0x00)
 results = []
+
+
+def remote_clipboard(text=None):
+    """Read, or set, the VNC target's X CLIPBOARD selection."""
+    if text is None:
+        return subprocess.run(
+            ["podman", "exec", "ix-vnctest", "sh", "-c",
+             "DISPLAY=:1 xclip -o -selection clipboard 2>/dev/null"],
+            capture_output=True, text=True, timeout=10).stdout
+    subprocess.run(
+        ["podman", "exec", "ix-vnctest", "sh", "-c",
+         f"printf %s '{text}' | DISPLAY=:1 xclip -selection clipboard"],
+        check=True, timeout=10)
 
 
 def check(ok, label, detail=""):
@@ -91,7 +109,9 @@ def open_desktop(page, name):
 
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
-    page = browser.new_page(viewport={"width": 1500, "height": 950})
+    context = browser.new_context(viewport={"width": 1500, "height": 950},
+                                  permissions=["clipboard-read", "clipboard-write"])
+    page = context.new_page()
     errors, sent = [], []
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.on("console", lambda m: errors.append(m.text) if m.type == "error"
@@ -101,6 +121,9 @@ with sync_playwright() as p:
     page.on("request", lambda r: sent.append(r.post_data or ""))
     login(page)
     reset_workspace(page)
+    # Start from a known screen whatever an earlier, interrupted run left.
+    subprocess.run(["podman", "exec", "ix-vnctest", "sh", "-c",
+                    "DISPLAY=:1 xsetroot -solid '#2a6f97'"], check=True, timeout=10)
 
     if not session_leaf(page, "desk-direct").count():
         new_profile(page, "vnc-ssh", "ssh", "127.0.0.1", 2223, "testpass", username="testuser")
@@ -128,11 +151,30 @@ with sync_playwright() as p:
     host_label = page.inner_text(f'.ix-pane[data-pane="{pane}"] .ix-pane-host')
     check("127.0.0.1" in host_label, "header names the desktop", host_label)
 
+    # ── the clipboard, remote to local ─────────────────────────────────────
+    # Done before any typing, on a quiet screen. What made this look flaky was
+    # not timing: x11vnc skips a selection identical to the last one it sent.
+    # Unique per run: x11vnc will not re-send a selection identical to the
+    # last one it forwarded, so a fixed string passes once and then never.
+    remote_text = f"REMOTE_CLIP_{int(time.time() * 1000) % 10**9}"
+    remote_clipboard(remote_text)
+    deadline = page.evaluate("Date.now()") + 20000
+    local = ""
+    while page.evaluate("Date.now()") < deadline and local != remote_text:
+        page.wait_for_timeout(300)
+        local = page.evaluate("() => navigator.clipboard.readText()")
+    check(local == remote_text, "what the remote copies lands in this clipboard", repr(local))
+    check(f"Copied {len(remote_text)} characters from the desktop" in page.inner_text("#ix-toast"),
+          "and says so", repr(page.inner_text("#ix-toast")))
+
     # Input: click into the xterm (no window manager, so focus follows the
     # pointer) and type a command that repaints the root window.
     box = page.locator(f"#pane-term-{pane} .ix-vnc canvas").bounding_box()
     scale = box["width"] / 1024
     page.mouse.click(box["x"] + 200 * scale, box["y"] + 150 * scale)
+    # ^C first: an earlier run's Ctrl+V can leave the shell quoting the next
+    # key, which would mangle the command.
+    page.keyboard.press("Control+c")
     page.keyboard.type("xsetroot -solid '#00aa00'\n", delay=15)
     got = wait_pixel(page, pane, 5, 5, CHANGED)
     check(close(got, CHANGED), "typing into the remote xterm repaints its root window", str(got))
@@ -142,6 +184,22 @@ with sync_playwright() as p:
                   for s in sent)
           and PASSWORD not in page.content(),
           "the VNC password is not in the page or anything it sent")
+
+    # ── the clipboard, local to remote ─────────────────────────────────────
+    page.evaluate("t => navigator.clipboard.writeText(t)", "LOCAL_CLIP_456")
+    page.mouse.click(box["x"] + 200 * scale, box["y"] + 150 * scale)
+    page.keyboard.press("Control+v")
+    page.wait_for_timeout(1500)
+    got = remote_clipboard()
+    check(got == "LOCAL_CLIP_456", "Ctrl+V inside the desktop sends this clipboard first", repr(got))
+
+    page.evaluate("t => navigator.clipboard.writeText(t)", "BUTTON_CLIP_789")
+    page.click(f'[data-pane-clip-send="{pane}"]')
+    page.wait_for_timeout(1500)
+    got = remote_clipboard()
+    check(got == "BUTTON_CLIP_789", "Paste to desktop sends it too", repr(got))
+    check(page.is_hidden(f'[data-pane-clip-take="{pane}"]'),
+          "Copy from desktop stays hidden while the browser allows writes")
 
     # ── through SSH, to a desktop that only listens on its own localhost ────
     pane_t = open_desktop(page, "desk-tunnel")
@@ -164,6 +222,7 @@ with sync_playwright() as p:
 
     # Put the root back for the next run.
     page.mouse.click(box["x"] + 200 * scale, box["y"] + 150 * scale)
+    page.keyboard.press("Control+c")
     page.keyboard.type("xsetroot -solid '#2a6f97'\n", delay=15)
     page.screenshot(path="/tmp/claude-1000/vnc_smoke.png")
     reset_workspace(page)

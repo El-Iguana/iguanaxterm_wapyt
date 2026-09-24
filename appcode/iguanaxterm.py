@@ -690,6 +690,12 @@ class IguanaXterm(MainWindow):
             container=host,
         )
         terminal.on_error(lambda payload: self._toast(payload.get("message", "Error")))
+        # Ctrl+C copies a selection now, so say so: otherwise a copy and an
+        # interrupt look the same until you paste.
+        terminal.on_copy(lambda payload: self._toast(f"Copied {payload.get('chars', 0)} characters."))
+        terminal.on_clipboard_error(
+            lambda payload: self._toast(payload.get("message") or "Clipboard not available.")
+        )
         for bind in (terminal.on_connect, terminal.on_error,
                      terminal.on_disconnect, terminal.on_reconnect_failed):
             bind(lambda _payload, pane_id=pane_id: self._settle(pane_id))

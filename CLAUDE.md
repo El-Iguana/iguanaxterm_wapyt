@@ -237,6 +237,26 @@ Not handled: files that already exist in the chosen destination are still
 overwritten, as on every platform, and Windows' 260-character path limit is not
 checked.
 
+### Terminal copy and paste lives in wapyt
+
+`TerminalConfig(clipboard=True)`, the default, gives Windows Terminal's
+bindings, implemented in wapyt's `terminal.js`:
+
+- **Ctrl+C copies a selection** and interrupts only when nothing is selected.
+- **Ctrl+V pastes**, and no longer sends ^V. The custom key handler returns
+  `false` and the browser's own `paste` event does the rest. That is why
+  keyboard paste needs no clipboard permission and keeps xterm's bracketed
+  paste. Only the right-click menu's Paste calls
+  `navigator.clipboard.readText()`, because a click is not a paste gesture;
+  if the browser refuses, `on_clipboard_error` explains and points to Ctrl+V.
+
+Measured before the change: only Ctrl+Shift+V pasted (the browser did it),
+and nothing copied. The menu's Escape listener was first deferred with
+`setTimeout(0)`, which lost to a fast Escape on a busy page: Chrome runs input
+ahead of timers. It is registered at once now, which is safe because the
+opening right-click's `mousedown` has already fired.
+`tests/smoke/clipboard_smoke.py` pins all of it against the real clipboard.
+
 ### Remote desktops: noVNC in the page, the VNC login on the server
 
 A `vnc` session opens a Desktop pane: noVNC 1.7, vendored unmodified at

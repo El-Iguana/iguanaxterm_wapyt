@@ -60,6 +60,11 @@ connect or fail, so it never makes the burst that restoring avoids.
   SSH host key is pinned
 - **Session library** — saved connections organised into folders, with a filter
 - **Terminal search** — Ctrl+F over the scrollback
+- **Copy and paste** — as in Windows Terminal: Ctrl+C copies a selection
+  (and interrupts without one), Ctrl+Shift+C always copies, Ctrl+V and
+  Ctrl+Shift+V paste (Cmd on a Mac), and right-click offers Copy, Paste and
+  Select all. Ctrl+V is no longer sent to the remote; in vim, Ctrl+Q starts
+  a visual block instead
 - **Auto-reconnect** — exponential backoff, up to 5 attempts
 - **Transient-failure retry** — a reset banner or a refused connection is
   retried up to 3 times before you ever see an error
@@ -388,6 +393,7 @@ resize path and the SFTP pool — everything else is unit-level. See
 | `narrow_pane_smoke.py` | the SFTP panel from 1200px down to 320px |
 | `tiled_smoke.py` | the grid, and switching layout modes |
 | `layout_smoke.py` | persistence, and that a restore dials nothing |
+| `clipboard_smoke.py` | terminal copy and paste against the real clipboard |
 | `vnc_smoke.py` | remote desktops, direct and tunnelled, with real pixels and input |
 | `server_save_smoke.py` | folder downloads saved on the server when there is no picker |
 | `windows_names_smoke.py` | Windows-safe folder download names, and Linux left alone |

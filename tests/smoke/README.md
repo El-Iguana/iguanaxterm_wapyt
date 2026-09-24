@@ -74,6 +74,16 @@ with `.focus()` rather than a click. And a maximized tile covers its
 neighbours, so the other tile's button is unreachable until you restore —
 the test takes the path a person would.
 
+## Clipboard smoke
+
+`clipboard_smoke.py` grants the browser clipboard access and checks each
+binding against the real system clipboard. Ctrl+V and Ctrl+Shift+V must
+paste. Ctrl+C on a selection must copy without sending an interrupt, and
+without a selection it must still interrupt a running `sleep`. Ctrl+Shift+C
+must copy. It also drives the right-click menu (Copy is disabled with nothing
+selected, Escape closes it). A second, unprivileged context checks that a
+refused clipboard read is explained rather than silently ignored.
+
 ## VNC smoke
 
 `vnc_smoke.py` runs against `Containerfile.vnctarget`: Xvfb with two

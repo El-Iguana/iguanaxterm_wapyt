@@ -117,6 +117,10 @@ from `x11vnc -storepasswd`, and **Connect** set to that machine's SSH session.
   case-insensitive disk `report.txt` would silently overwrite `Report.txt`.
   Those are cleaned (`a_b.txt`, `CON_.log`) or numbered (`report (2).txt`)
   instead, and the summary says how many changed. Linux keeps every name as-is
+- **Downloads never replace what is already there** — a folder or file that
+  already exists in the chosen destination is kept, and the new one saved as
+  `Amber (2)` / `readme (2).txt`, the way a browser names a second download.
+  Nothing is merged into an existing folder
 - **Folder downloads in any browser** — where the browser cannot pick a
   destination (Firefox, or any non-https origin), a folder is saved on the
   server instead, in `~/Downloads/IguanaXterm/<you>/` with the local container.

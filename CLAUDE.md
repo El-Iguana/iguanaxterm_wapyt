@@ -233,9 +233,20 @@ dialog gets the cleaned name as its suggestion. The rename count joins the
 "Downloaded N of M" toast instead of getting its own, because a second toast
 replaces the first.
 
-Not handled: files that already exist in the chosen destination are still
-overwritten, as on every platform, and Windows' 260-character path limit is not
-checked.
+**Nothing already in the destination is replaced.** `getFileHandle(name,
+{create: true})` opens an existing file and writing replaces it, silently. So
+`_avoid_overwrites` asks wapyt's `filetransfer.exists()` about each top-level
+item of the batch, a folder or a loose file, and numbers any that is taken
+(`Amber (2)`, `readme (2).txt`), using the same `numbered_name` as the case
+collisions. Everything below a renamed folder lands in a fresh folder: no
+merge, no replacement. The file system decides what "taken" means, so a
+case-insensitive disk is honoured. The single-file Save dialog needs none of
+this, because the browser asks before replacing. `transfer_smoke.py`'s stub
+models existing entries and counts writes per path; a second identical
+download must produce `readme (3).txt` and `logs (2)/`, with every path
+written exactly once.
+
+Still not handled: Windows' 260-character path limit.
 
 ### Interrupted downloads resume
 

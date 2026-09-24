@@ -93,7 +93,7 @@ def windows_safe_name(name: str) -> str:
 _COMPOUND_EXTENSIONS = (".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst")
 
 
-def _numbered(name: str, n: int, is_dir: bool) -> str:
+def numbered_name(name: str, n: int, is_dir: bool) -> str:
     """``photo (2).jpg``; a directory, or a dotfile, is numbered at the end."""
     lowered = name.lower()
     for compound in _COMPOUND_EXTENSIONS:
@@ -134,7 +134,7 @@ class LocalNames:
         candidate, n = wanted, 1
         while self._key(candidate) in taken:
             n += 1
-            candidate = _numbered(wanted, n, is_dir)
+            candidate = numbered_name(wanted, n, is_dir)
         taken.add(self._key(candidate))
         if candidate != name:
             self.renamed += 1

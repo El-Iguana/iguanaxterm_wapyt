@@ -58,6 +58,7 @@ from services.paths import (
     SESSION_TYPES,
     LocalNames,
     breadcrumbs,
+    numbered_name,
     format_size,
     parent_path,
     session_caps,
@@ -1874,16 +1875,63 @@ class IguanaXterm(MainWindow):
         # host allows names this machine may not (`a:b` on Windows), and a
         # case-insensitive disk would let `report.txt` silently overwrite
         # `Report.txt` -- the browser gives no warning of either.
-        names = LocalNames(**_local_platform())
+        platform = _local_platform()
+        names = LocalNames(**platform)
         jobs = [
             (remote, label, handle, names.map(relative) if relative else relative)
             for remote, label, handle, relative in jobs
         ]
+        jobs, kept = await self._avoid_overwrites(chosen.id, jobs, platform["case_insensitive"])
 
         await self._run_download_queue(
-            tab_id, jobs, folder_id=chosen.id, renamed=names.renamed
+            tab_id, jobs, folder_id=chosen.id, renamed=names.renamed, kept=kept
         )
         filetransfer.release(chosen.id)
+
+    async def _avoid_overwrites(
+        self, folder_id: str, jobs: list, case_insensitive: bool
+    ) -> tuple[list, dict]:
+        """
+        Rename, not replace, what is already in the chosen folder.
+
+        Writing a file creates it, and an existing one of the same name is
+        replaced without a word. So every *top-level* item of the download --
+        a folder, or a loose file -- that is already there becomes
+        ``Amber (2)`` / ``readme (2).txt``, as a browser names a second
+        download and as a server-side save does. Everything below a renamed
+        folder then lands in a fresh folder: nothing is merged, nothing is
+        replaced. Returns the rewritten jobs and ``{old: new}``.
+        """
+        tops: dict = {}
+        for _remote, _label, _handle, relative in jobs:
+            if relative:
+                first, _, rest = relative.partition("/")
+                tops[first] = tops.get(first, False) or bool(rest)
+
+        def key(name: str) -> str:
+            return name.casefold() if case_insensitive else name
+
+        taken: set = set()
+        renames: dict = {}
+        for name, is_dir in tops.items():
+            candidate, n = name, 1
+            # Also clear of names this batch has already claimed.
+            while key(candidate) in taken or await filetransfer.exists(folder_id, candidate):
+                n += 1
+                candidate = numbered_name(name, n, is_dir)
+            taken.add(key(candidate))
+            if candidate != name:
+                renames[name] = candidate
+
+        if not renames:
+            return jobs, renames
+        rewritten = []
+        for remote, label, handle, relative in jobs:
+            if relative:
+                first, sep, rest = relative.partition("/")
+                relative = renames.get(first, first) + sep + rest
+            rewritten.append((remote, label, handle, relative))
+        return rewritten, renames
 
     async def _save_to_server(self, tab_id: str, session_id: int, folder: dict) -> None:
         """
@@ -2045,7 +2093,8 @@ class IguanaXterm(MainWindow):
         return jobs
 
     async def _run_download_queue(
-        self, tab_id: str, jobs: list, folder_id: str = "", renamed: int = 0
+        self, tab_id: str, jobs: list, folder_id: str = "", renamed: int = 0,
+        kept: dict | None = None,
     ) -> None:
         entry = self._sftp_tabs.get(tab_id)
         if entry is None:
@@ -2088,6 +2137,15 @@ class IguanaXterm(MainWindow):
                 f" Renamed {renamed} name(s) this computer cannot store as "
                 "they are on the server."
             )
+        if kept:
+            if len(kept) == 1:
+                old, new = next(iter(kept.items()))
+                summary += f" Saved “{old}” as “{new}”: one was already there."
+            else:
+                summary += (
+                    f" {len(kept)} items were already there, so the new ones "
+                    "were numbered instead of replacing them."
+                )
         self._toast(summary)
 
     # ── Upload ─────────────────────────────────────────────────────────────

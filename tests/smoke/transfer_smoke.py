@@ -56,14 +56,44 @@ function makeWritable(path){
   stream.abort = async () => { data = new Uint8Array(0); };
   return stream;
 }
+// What exists on the fake disk, path -> "file" | "dir", with the real API's
+// rules: a lookup without {create: true} throws NotFoundError for a missing
+// entry, and asking for the wrong kind throws TypeMismatchError. __writes
+// counts commits per path, so any overwrite at all is visible to a test.
+window.__entries = new Map([["/dest", "dir"]]);
+window.__writes = {};
+function lookup(path, kind, create){
+  const found = window.__entries.get(path);
+  if (found && found !== kind) throw new DOMException("wrong kind", "TypeMismatchError");
+  if (!found && !create) throw new DOMException("missing", "NotFoundError");
+  if (!found && kind === "dir") window.__entries.set(path, "dir");
+}
 class FakeFileHandle {
   constructor(path){ this.name = path.split('/').pop(); this.path = path; }
-  async createWritable(){ return makeWritable(this.path); }
+  async createWritable(){
+    const writable = makeWritable(this.path);
+    const commit = writable.close;
+    const path = this.path;
+    writable.close = async () => {
+      await commit();
+      window.__entries.set(path, "file");
+      window.__writes[path] = (window.__writes[path] || 0) + 1;
+    };
+    return writable;
+  }
 }
 class FakeDirHandle {
   constructor(path){ this.name = path.split('/').pop() || 'dest'; this.path = path; }
-  async getDirectoryHandle(name){ return new FakeDirHandle(this.path + '/' + name); }
-  async getFileHandle(name){ return new FakeFileHandle(this.path + '/' + name); }
+  async getDirectoryHandle(name, opts){
+    const path = this.path + '/' + name;
+    lookup(path, "dir", opts && opts.create);
+    return new FakeDirHandle(path);
+  }
+  async getFileHandle(name, opts){
+    const path = this.path + '/' + name;
+    lookup(path, "file", opts && opts.create);
+    return new FakeFileHandle(path);
+  }
 }
 window.showSaveFilePicker = async (opts) => {
   window.__lastSuggested = (opts || {}).suggestedName || '';
@@ -162,7 +192,9 @@ def main() -> int:
         page.wait_for_timeout(6000)
 
         paths = page.evaluate("() => Object.keys(window.__saved).sort()")
-        check(any(p.endswith("/readme.txt") for p in paths),
+        # "readme (2).txt", not "readme.txt": the single-file step already
+        # saved one, and nothing already there is replaced (checked below).
+        check(any(p.startswith("/dest/readme") for p in paths),
               "folder download wrote the plain file", str(paths))
         check(any("logs/app.log" in p for p in paths),
               "folder download recreated the tree", str(paths))
@@ -173,6 +205,30 @@ def main() -> int:
         }""")
         check(content and "line one" in content, "nested file content correct",
               repr(content))
+
+        # ── nothing already there is replaced ───────────────────────────────
+        # The single-file step above saved /dest/readme.txt, so this folder
+        # download met it: it must have become "readme (2).txt".
+        check("/dest/readme (2).txt" in paths and "/dest/logs/app.log" in paths,
+              "an existing file is kept; the new one is numbered", str(paths))
+        toast = page.inner_text("#ix-toast")
+        check("“readme.txt” as “readme (2).txt”" in toast, "and the toast says so", repr(toast))
+
+        # The same selection again: now both the file and the folder clash.
+        row_for(page, "readme.txt").click()
+        page.keyboard.down("Control")
+        row_for(page, "logs").click()
+        page.keyboard.up("Control")
+        page.click('.ix-sftp-btn[data-sftp="download"]')
+        page.wait_for_timeout(6000)
+        paths = page.evaluate("() => Object.keys(window.__saved).sort()")
+        check("/dest/readme (3).txt" in paths and "/dest/logs (2)/app.log" in paths,
+              "a second identical download is numbered, file and folder", str(paths))
+        writes = page.evaluate("() => window.__writes")
+        check(all(count == 1 for count in writes.values()),
+              "no path was ever written twice", str(writes))
+        check("2 items were already there" in page.inner_text("#ix-toast"),
+              "and the toast counts them", repr(page.inner_text("#ix-toast")))
 
         # ── upload ──────────────────────────────────────────────────────────
         page.click(".ix-queue-clear")

@@ -129,6 +129,15 @@ def _local_platform() -> dict:
     return {"windows": windows, "case_insensitive": windows or "mac" in platform}
 
 
+def _recovered(outcome) -> str:
+    """Queue detail for a finished download that had to pick itself back up."""
+    if outcome.restarted:
+        return "done (file changed; restarted)"
+    if outcome.retries:
+        return f"done (resumed {outcome.retries}×)"
+    return ""
+
+
 def _csrf_token() -> str:
     """
     pytincture's CSRF cookie. Readable from script on purpose — echoing it back
@@ -189,6 +198,7 @@ class IguanaXterm(MainWindow):
         self._reconnecting_all = False
         self._reconnect_progress = ""  # the button's label while it runs
         self._novnc_task = None         # noVNC's one-time loader, once started
+        self._paused_transfers: set = set()  # downloads waiting for Resume
         self._save_task = None
         self._grid = None          # the GridStack instance, once loaded
         self._grid_proxies: list = []
@@ -2042,6 +2052,7 @@ class IguanaXterm(MainWindow):
             return
         session_id = entry["session_id"]
         done = 0
+        paused = 0
 
         for remote, label, file_handle, relative in jobs:
             transfer_id = self._queue_add(tab_id, label, "download")
@@ -2059,13 +2070,18 @@ class IguanaXterm(MainWindow):
 
             if outcome.ok:
                 done += 1
-                self._queue_finish(tab_id, transfer_id, "done")
+                self._queue_finish(tab_id, transfer_id, "done", _recovered(outcome))
+            elif outcome.resumable:
+                paused += 1
+                self._queue_pause(tab_id, transfer_id, outcome.error)
             elif outcome.cancelled:
                 self._queue_finish(tab_id, transfer_id, "cancelled")
             else:
                 self._queue_finish(tab_id, transfer_id, "failed", outcome.error)
 
         summary = f"Downloaded {done} of {len(jobs)} file(s)."
+        if paused:
+            summary += f" {paused} lost the connection and paused; press Resume."
         if renamed:
             # One toast, not two: a second would replace this one.
             summary += (
@@ -2206,7 +2222,7 @@ class IguanaXterm(MainWindow):
         stop.title = "Cancel"
         # A browser transfer is cancelled in the page; a copy running on the
         # server is cancelled there, by whoever started the row.
-        cancel = on_cancel or (lambda: filetransfer.cancel(transfer_id))
+        cancel = on_cancel or (lambda: self._cancel_transfer(tab_id, transfer_id))
         stop.addEventListener("click", create_proxy(lambda _e: cancel()))
         row.appendChild(stop)
 
@@ -2243,6 +2259,64 @@ class IguanaXterm(MainWindow):
             status.textContent = detail or state
             if detail:
                 status.title = detail
+
+    def _queue_pause(self, tab_id: str, transfer_id: str, detail: str) -> None:
+        """
+        A download that ran out of automatic retries. Its bytes so far are
+        kept (in the browser's swap file, not under the real name) and a
+        Resume button asks the server for the rest.
+        """
+        self._paused_transfers.add(transfer_id)
+        self._queue_finish(tab_id, transfer_id, "paused", "paused")
+        status = js.document.getElementById(f"st-{tab_id}-{transfer_id}")
+        if status:
+            status.title = detail
+        row = js.document.getElementById(f"{tab_id}-{transfer_id}")
+        if row and not row.querySelector(".ix-queue-resume"):
+            button = js.document.createElement("button")
+            button.type = "button"
+            button.className = "ix-queue-resume"
+            button.title = "Carry on from where it stopped"
+            button.innerHTML = '<span class="mdi mdi-play"></span>'
+            button.addEventListener(
+                "click",
+                create_proxy(lambda _e: _spawn(self._resume_download(tab_id, transfer_id), "resume")),
+            )
+            row.insertBefore(button, row.querySelector(".ix-queue-cancel"))
+
+    async def _resume_download(self, tab_id: str, transfer_id: str) -> None:
+        if transfer_id not in self._paused_transfers:
+            return
+        self._paused_transfers.discard(transfer_id)
+        row = js.document.getElementById(f"{tab_id}-{transfer_id}")
+        if row:
+            row.removeAttribute("data-state")
+            resume = row.querySelector(".ix-queue-resume")
+            if resume:
+                resume.remove()
+        status = js.document.getElementById(f"st-{tab_id}-{transfer_id}")
+        if status:
+            status.textContent = "resuming…"
+        outcome = await filetransfer.resume(transfer_id, self._queue_progress(tab_id, transfer_id))
+        if outcome.ok:
+            self._queue_finish(tab_id, transfer_id, "done", _recovered(outcome))
+        elif outcome.resumable:
+            self._queue_pause(tab_id, transfer_id, outcome.error)
+        elif outcome.cancelled:
+            self._queue_finish(tab_id, transfer_id, "cancelled")
+        else:
+            self._queue_finish(tab_id, transfer_id, "failed", outcome.error)
+
+    def _cancel_transfer(self, tab_id: str, transfer_id: str) -> None:
+        """The row's ×: stops a running transfer, or discards a paused one."""
+        filetransfer.cancel(transfer_id)
+        if transfer_id in self._paused_transfers:
+            self._paused_transfers.discard(transfer_id)
+            row = js.document.getElementById(f"{tab_id}-{transfer_id}")
+            resume = row.querySelector(".ix-queue-resume") if row else None
+            if resume:
+                resume.remove()
+            self._queue_finish(tab_id, transfer_id, "cancelled")
 
     def _queue_clear_finished(self, tab_id: str) -> None:
         rows = js.document.getElementById(f"queue-rows-{tab_id}")
@@ -2854,6 +2928,11 @@ _SFTP_CSS = """
   background:transparent;border:none;border-radius:4px;cursor:pointer;font-size:14px;}
 .ix-queue-cancel:hover{background:#1f2937;color:#f87171;}
 .ix-queue-row[data-state] .ix-queue-cancel{visibility:hidden;}
+/* A paused download can still be discarded. */
+.ix-queue-row[data-state="paused"] .ix-queue-cancel{visibility:visible;}
+.ix-queue-resume{flex:0 0 auto;width:20px;height:20px;padding:0;color:#38bdf8;
+  background:transparent;border:0;border-radius:4px;cursor:pointer;}
+.ix-queue-resume:hover{background:#1f2937;}
 .ix-queue-row[data-state="done"] .ix-queue-bar{background:#34d399;}
 .ix-queue-row[data-state="failed"] .ix-queue-bar{background:#f87171;}
 .ix-queue-row[data-state="failed"] .ix-queue-status{color:#f87171;}

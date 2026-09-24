@@ -125,6 +125,14 @@ from `x11vnc -storepasswd`, and **Connect** set to that machine's SSH session.
 - **Upload files or whole folders** — pick individual files, or a directory
   whose structure is recreated on the far side. Drag and drop works too.
 - **A transfer queue** with per-file progress, and cancel
+- **Downloads survive a dropped connection** — the download asks the server
+  for the rest (`Range`) and picks up where it stopped, up to four times on
+  its own. After that the row pauses with a **Resume** button, keeping what it
+  has; the partial data lives in the browser's temporary file, never under the
+  real name. If the file changed on the server meanwhile, it starts over
+  rather than splicing old and new (`ETag` + `If-Range`). Where the page
+  cannot pick a destination, the browser's own download manager resumes
+  through the same range support
 - **Narrow-pane aware** — in a small tile the toolbar collapses to icons and
   secondary columns give way, so the filename never gets squeezed out
 
@@ -132,10 +140,6 @@ from `x11vnc -storepasswd`, and **Connect** set to that machine's SSH session.
 
 - **Multi-user** — private session libraries, plus an admin panel
 - **Encrypted at rest** — SSH passwords and private keys under Fernet (AES-128)
-
-## Planned
-
-- **Transfer resume** — HTTP range requests for interrupted downloads.
 
 ## Stack
 
@@ -400,6 +404,7 @@ resize path and the SFTP pool — everything else is unit-level. See
 | `tiled_smoke.py` | the grid, and switching layout modes |
 | `layout_smoke.py` | persistence, and that a restore dials nothing |
 | `clipboard_smoke.py` | terminal copy and paste against the real clipboard |
+| `resume_smoke.py` | interrupted downloads: automatic resume, pause and Resume, a file that changed |
 | `vnc_smoke.py` | remote desktops, direct and tunnelled, with real pixels and input |
 | `server_save_smoke.py` | folder downloads saved on the server when there is no picker |
 | `windows_names_smoke.py` | Windows-safe folder download names, and Linux left alone |

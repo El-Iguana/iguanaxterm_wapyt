@@ -145,3 +145,28 @@ def test_idle_eviction_spares_a_channel_mid_transfer(pool):
 
     pool._evict_idle()
     assert key not in pool._connections, "an idle, unlocked channel should still go"
+
+
+def test_discard_drops_only_the_connection_it_was_given(pool, monkeypatch):
+    """
+    A download cut short discards its channel (read-ahead replies may still be
+    in flight). It must not take out a newer connection that replaced it, and
+    it closes the old one only after a grace period.
+    """
+    from services import pool as pool_module
+    from services.sftp_service import _PooledConnection
+
+    monkeypatch.setattr(pool_module, "_DISCARD_GRACE_SECONDS", 0.05)
+    client, key = _seed(pool)
+    old = pool._connections[key]
+
+    newer = _PooledConnection(_FakeClient(), sftp=object())
+    pool._connections[key] = newer
+    pool.discard(1, 7, old)
+    assert pool._connections[key] is newer, "discarded a connection it was not given"
+
+    pool.discard(1, 7, newer)
+    assert key not in pool._connections
+    assert newer.client.closed == 0, "closed before the grace period"
+    time.sleep(0.2)
+    assert newer.client.closed == 1

@@ -74,6 +74,29 @@ with `.focus()` rather than a click. And a maximized tile covers its
 neighbours, so the other tile's button is unreachable until you restore —
 the test takes the path a person would.
 
+## Resume smoke
+
+`resume_smoke.py` interrupts downloads for real. `flaky_proxy.py` sits
+between the browser and the app and resets any download connection for
+`resumeme.bin` once 512 KB has gone through, as many times as the number in
+its control file says. The app runs behind it, so its canonical origin is the
+proxy's port:
+
+```bash
+GANXTERM_DATA_DIR=/tmp/ixresume GANXTERM_ADMIN_PASS=testpass123 PORT=8797 \
+  GANXTERM_CANONICAL_ORIGIN=http://127.0.0.1:8798 uv run python service.py &
+python3 tests/smoke/flaky_proxy.py 8798 8797 /tmp/ixresume-cuts &
+RESUME_CUTS=/tmp/ixresume-cuts python3 tests/smoke/resume_smoke.py
+```
+
+It checks the route (206, 416, a stale `If-Range` gets 200), then three
+scenarios on a 12 MB file whose SHA-256 is compared with the server's. Two
+drops must resume on their own. Five drops must pause the row, with nothing
+under the real name, and Resume must finish it. A pause, then a new file on
+the server, then Resume must restart and deliver the new file whole. The cut
+threshold is small on purpose: at 3 MB, a resume near the end of the file
+never reached it, and a test asking for five drops got four.
+
 ## Clipboard smoke
 
 `clipboard_smoke.py` grants the browser clipboard access and checks each

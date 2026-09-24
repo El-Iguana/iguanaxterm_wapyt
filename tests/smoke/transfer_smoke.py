@@ -30,22 +30,31 @@ def check(ok, label, detail=""):
 # test can assert on the actual bytes that came down the wire.
 PICKER_STUB = """
 window.__saved = {};
-// Must be a genuine WritableStream: response.body.pipeTo() rejects anything
-// else, and the real FileSystemWritableFileStream is one.
+// Mirrors FileSystemWritableFileStream: a WritableStream (pipeTo needs one)
+// that also has write/seek/truncate/close/abort methods and keeps a position.
+// Nothing reaches __saved until close() -- like the real one, which writes a
+// swap file and only commits on close, and discards everything on abort.
 function makeWritable(path){
-  const chunks = [];
-  return new WritableStream({
-    write(chunk){
-      chunks.push(chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk));
-    },
-    close(){
-      let n = 0; chunks.forEach(c => n += c.length);
-      const out = new Uint8Array(n); let o = 0;
-      chunks.forEach(c => { out.set(c, o); o += c.length; });
-      window.__saved[path] = out;
-    },
+  let data = new Uint8Array(0);
+  let position = 0;
+  const put = (chunk) => {
+    const bytes = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+    const end = position + bytes.length;
+    if (end > data.length) { const grown = new Uint8Array(end); grown.set(data); data = grown; }
+    data.set(bytes, position);
+    position = end;
+  };
+  const stream = new WritableStream({
+    write(chunk){ put(chunk); },
+    close(){ window.__saved[path] = data.slice(); },
     abort(){ },
   });
+  stream.write = async (chunk) => put(chunk);
+  stream.seek = async (to) => { position = to; };
+  stream.truncate = async (size) => { data = data.slice(0, size); position = Math.min(position, size); };
+  stream.close = async () => { window.__saved[path] = data.slice(); };
+  stream.abort = async () => { data = new Uint8Array(0); };
+  return stream;
 }
 class FakeFileHandle {
   constructor(path){ this.name = path.split('/').pop(); this.path = path; }

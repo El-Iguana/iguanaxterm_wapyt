@@ -237,6 +237,38 @@ Not handled: files that already exist in the chosen destination are still
 overwritten, as on every platform, and Windows' 260-character path limit is not
 checked.
 
+### Interrupted downloads resume
+
+- **Server:** `/files/<id>/download` answers `Range` with 206, sends
+  `Accept-Ranges`, an `ETag` (size + mtime) and `Last-Modified` on every
+  response, and honours `If-Range`: a stale validator gets the whole file with
+  200, never a splice. The rules are pure functions in
+  `services/http_ranges.py`. `transfer.open_at` starts mid-file: paramiko
+  seeks, and FTP sends `REST` (the adapter's `open(..., offset=)`).
+- **Browser (wapyt `filetransfer.js`):** a network error or 5xx retries from
+  the last byte written, 4 times with backoff. After that the transfer
+  *pauses*: the writable stays open, so the partial data sits in the
+  browser's swap file, never under the real name. `resume(id)` carries on,
+  and `cancel(id)` discards. A 200 answering a range means the file changed,
+  so the writable is truncated and it starts over. The app's queue shows
+  "done (resumed 2×)", a Resume button, or "done (file changed; restarted)".
+- **An abandoned download used to keep its connection.** The stream was a
+  generator holding the pooled channel's lock across `yield`. When the
+  browser went away (a drop, or a cancel in the queue) Starlette stopped
+  iterating, and the lock stayed held: the next request on that session
+  waited forever. Or, once garbage collection closed the handle from some
+  other thread outside the lock, paramiko reported "Garbage packet
+  received". It is an async generator now, and its `finally` (shielded with
+  `anyio.CancelScope`) closes the handle and releases the lock. A transfer
+  cut short also `discard`s its channel, because read-ahead replies may still
+  be in flight. The channel is closed after a 15 s grace, since closing under
+  paramiko's still-sending read-ahead thread only printed EOFError tracebacks.
+- `resume_smoke.py` uses **real** dropped connections from
+  `tests/smoke/flaky_proxy.py`, a TCP proxy that resets download connections
+  mid-body as often as a control file says. wapyt's `filetransfer` package
+  re-exports by hand; `resume` was once defined but not exported, and a wapyt
+  test now fails for any public function the package forgets.
+
 ### Terminal copy and paste lives in wapyt
 
 `TerminalConfig(clipboard=True)`, the default, gives Windows Terminal's

@@ -463,9 +463,13 @@ class FTPFiles:
     def rename(self, old_path: str, new_path: str) -> None:
         self._call(old_path, lambda ftp: ftp.rename(old_path, new_path))
 
-    def open(self, path: str, mode: str = "rb") -> "_TransferHandle":
+    def open(self, path: str, mode: str = "rb", offset: int = 0) -> "_TransferHandle":
         """
         A streaming handle for RETR (``rb``) or STOR (``wb``).
+
+        ``offset`` starts a RETR part-way in (``REST``), which is how a resumed
+        download skips what it already has. paramiko's handles seek instead;
+        ``transfer.open_at`` hides the difference.
 
         Holds ``_busy`` until closed: the control connection is committed to
         this transfer until the server's closing reply has been read.
@@ -486,7 +490,7 @@ class FTPFiles:
                     # listing would otherwise let the server rewrite line
                     # endings inside a JPEG. retrbinary() does the same.
                     self._ftp.voidcmd("TYPE I")
-                    data = self._ftp.transfercmd(command)
+                    data = self._ftp.transfercmd(command, rest=offset or None)
                     break
                 except ftplib.error_perm as exc:
                     raise _as_ioerror(exc, path) from exc

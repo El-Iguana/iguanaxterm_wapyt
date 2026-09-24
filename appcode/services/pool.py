@@ -29,6 +29,9 @@ from services.db import get_db
 # SFTP calls are blocking; they run here rather than on the event loop.
 walk_executor = ThreadPoolExecutor(max_workers=16, thread_name_prefix="sftp")
 
+# How long a discarded connection stays open before it is closed; see discard().
+_DISCARD_GRACE_SECONDS = 15
+
 # Drop a pooled connection that has gone unused for this long.
 _IDLE_TIMEOUT_SECONDS = 300
 
@@ -167,6 +170,33 @@ class SFTPPool:
             except Exception:
                 pass
         return 0
+
+    def discard(self, user_id: int, session_id: int, conn: "_PooledConnection") -> None:
+        """
+        Drop one connection that can no longer be trusted, if it is still the
+        pooled one. Holds are left alone: the next acquire dials a fresh
+        channel for the same session.
+        """
+        key = (int(user_id), int(session_id))
+        with self._guard:
+            if self._connections.get(key) is not conn:
+                return
+            self._connections.pop(key, None)
+
+        # Not closed at once: paramiko's read-ahead thread is usually still
+        # sending its requests, and closing under it only makes that thread
+        # die with an EOFError traceback in the log. It sends them all
+        # straight away, so a short wait lets it finish first. Nothing else
+        # can reach this connection now it has left the pool.
+        def _close() -> None:
+            try:
+                conn.client.close()
+            except Exception:
+                pass
+
+        timer = threading.Timer(_DISCARD_GRACE_SECONDS, _close)
+        timer.daemon = True
+        timer.start()
 
     def close(self, session_id: int) -> None:
         """

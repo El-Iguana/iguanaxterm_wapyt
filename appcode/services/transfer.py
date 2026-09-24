@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+
+import anyio
 import posixpath
 import time
-from typing import Iterator, Optional
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -30,6 +32,7 @@ from services.auth import current_user_id
 from services.db import fetch_session
 from services.paths import is_safe_name
 from services import ftp as ftp_helpers
+from services import http_ranges
 from services import ssh as ssh_helpers
 from services.pool import transfer_pool
 
@@ -91,22 +94,45 @@ def _safe_relative(relative: str) -> str:
     return "/".join(parts)
 
 
+def open_at(sftp, path: str, offset: int):
+    """
+    A read handle positioned at ``offset``.
+
+    paramiko opens and then seeks (its prefetch starts from the position, so
+    read-ahead still applies). FTP has to be told before RETR is sent, so the
+    adapter takes the offset up front and issues REST.
+    """
+    if isinstance(sftp, ftp_helpers.FTPFiles):
+        return sftp.open(path, "rb", offset=offset)
+    handle = sftp.open(path, "rb")
+    if offset:
+        handle.seek(offset)
+    return handle
+
+
 @router.get("/{session_id}/download")
 async def download(request: Request, session_id: int, path: str) -> StreamingResponse:
-    """Stream one remote file to the browser."""
+    """
+    Stream one remote file to the browser, whole or from a byte range.
+
+    ``Range: bytes=N-`` gets 206 and the rest of the file: that is how an
+    interrupted download resumes, both the page's own retry and the browser's
+    download manager on the fallback path. Every response carries a validator,
+    and a resume sends it back in ``If-Range``; if the file changed in between,
+    the range is dropped and the whole new file sent (200), so two versions are
+    never spliced together.
+    """
     user_id, profile = _require_profile(request, session_id)
     loop = asyncio.get_running_loop()
 
-    def _open():
+    def _stat():
         conn = transfer_pool.acquire(user_id, int(session_id), profile)
         with conn.lock:
             attrs = conn.sftp.stat(path)
-            handle = conn.sftp.open(path, "rb")
-            handle.prefetch(attrs.st_size or 0)
-            return conn, handle, int(attrs.st_size or 0)
+        return conn, int(attrs.st_size or 0), attrs.st_mtime
 
     try:
-        conn, handle, size = await loop.run_in_executor(None, _open)
+        conn, size, mtime = await loop.run_in_executor(None, _stat)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="File not found")
     except (ssh_helpers.SSHUnavailable, ftp_helpers.FTPUnavailable) as exc:
@@ -115,35 +141,89 @@ async def download(request: Request, session_id: int, path: str) -> StreamingRes
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    def _stream() -> Iterator[bytes]:
-        # The pooled channel is single-threaded; hold its lock for the whole
-        # transfer so a concurrent operation cannot interleave on it.
-        try:
-            with conn.lock:
-                while True:
-                    chunk = handle.read(_CHUNK)
-                    if not chunk:
-                        break
-                    yield chunk
-        finally:
-            try:
-                handle.close()
-            except Exception:
-                pass
-            conn.last_used = time.monotonic()
-
-    filename = posixpath.basename(path) or "download"
+    etag = http_ranges.make_etag(size, mtime)
     headers = {
         # RFC 5987 form so non-ASCII names survive. Only the anchor fallback
         # reads this; a picker download names the file from the handle.
-        "Content-Disposition": f"attachment; filename*=UTF-8''{_quote(filename)}",
+        "Content-Disposition": f"attachment; filename*=UTF-8''{_quote(posixpath.basename(path) or 'download')}",
+        "Accept-Ranges": "bytes",
+        "ETag": etag,
     }
-    if size:
-        # The browser needs this to show real download progress.
-        headers["Content-Length"] = str(size)
+    modified = http_ranges.last_modified(mtime)
+    if modified:
+        headers["Last-Modified"] = modified
 
+    wanted = None
+    if http_ranges.if_range_allows(request.headers.get("if-range"), etag, mtime):
+        try:
+            wanted = http_ranges.parse_range(request.headers.get("range"), size)
+        except http_ranges.RangeNotSatisfiable:
+            raise HTTPException(
+                status_code=416, detail="Range not satisfiable",
+                headers={"Content-Range": f"bytes */{size}", **headers},
+            )
+    first, last = wanted if wanted else (0, size - 1)
+    length = max(0, last - first + 1)
+
+    def _open():
+        with conn.lock:
+            handle = open_at(conn.sftp, path, first)
+            if hasattr(handle, "prefetch") and length:
+                handle.prefetch(size)
+            return handle
+
+    try:
+        handle = await loop.run_in_executor(None, _open)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    def _finish(complete: bool) -> None:
+        try:
+            handle.close()
+        except Exception:
+            pass
+        conn.last_used = time.monotonic()
+        conn.lock.release()
+        if not complete:
+            # Cut short: paramiko's read-ahead may still have replies in
+            # flight on this channel, and the next request would read them as
+            # its own ("Garbage packet received"). Start the next one fresh.
+            transfer_pool.discard(user_id, int(session_id), conn)
+
+    async def _stream():
+        """
+        The pooled channel is single-threaded, so the transfer holds its lock
+        from first byte to last -- and must give it back however it ends.
+
+        This used to be a plain generator holding the lock across ``yield``.
+        When the browser went away mid-download (a dropped connection, a
+        cancel in the queue) Starlette just stopped iterating: the generator
+        sat suspended with the lock, and the next request on that session
+        waited forever -- or, once garbage collection closed the handle from
+        some other thread outside the lock, broke the channel. An async
+        generator's ``finally`` runs when Starlette cancels it, and the shield
+        keeps that cancellation from cutting the cleanup short.
+        """
+        remaining = length
+        await loop.run_in_executor(None, conn.lock.acquire)
+        try:
+            while remaining > 0:
+                chunk = await loop.run_in_executor(None, handle.read, min(_CHUNK, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+        finally:
+            with anyio.CancelScope(shield=True):
+                await anyio.to_thread.run_sync(_finish, remaining == 0)
+
+    headers["Content-Length"] = str(length)  # the browser shows progress from this
+    status = 200
+    if wanted:
+        status = 206
+        headers["Content-Range"] = f"bytes {first}-{last}/{size}"
     return StreamingResponse(
-        _stream(), media_type="application/octet-stream", headers=headers
+        _stream(), status_code=status, media_type="application/octet-stream", headers=headers
     )
 
 

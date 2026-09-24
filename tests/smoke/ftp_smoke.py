@@ -81,7 +81,7 @@ with sync_playwright() as p:
         options = page.eval_on_selector_all(
             '[name="session_type"] option', "els => els.map(e => e.value)"
         )
-        check(options == ["ssh", "telnet", "sftp", "ftp"], "editor offers all four types", str(options))
+        check(options == ["ssh", "telnet", "sftp", "ftp", "vnc"], "editor offers every type", str(options))
         page.select_option('[name="session_type"]', "ftp")
         page.wait_for_timeout(200)
         check(page.input_value('[name="port"]') == "21", "choosing FTP fills in port 21",

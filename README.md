@@ -3,7 +3,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-2.0.0-green.svg)]()
 
-A browser-based SSH/Telnet terminal manager with SFTP and FTP file browsing. Manage all your remote
+A browser-based SSH/Telnet terminal manager with SFTP and FTP file browsing,
+and remote desktops over VNC. Manage all your remote
 connections from a single web UI — no client software required. Tile them side
 by side, or keep them in tabs; either way the workspace is there when you come
 back.
@@ -67,6 +68,32 @@ connect or fail, so it never makes the burst that restoring avoids.
 - **Key auth** — RSA, Ed25519 and ECDSA, with passphrase support (DSA is gone;
   Paramiko 5 dropped it)
 
+### Remote desktops
+
+- **VNC in a pane** — a remote desktop tiles, maximizes and restores like any
+  other connection, scaled to fit its tile, with a Ctrl+Alt+Del button
+  (the browser cannot pass that combination through itself)
+- **Direct, or through an SSH session** — a VNC profile either connects
+  straight to `host:port` (a trusted LAN only: VNC is unencrypted), or rides one
+  of your saved SSH sessions to a desktop that listens only on that machine's
+  `localhost`. Tunnelling reuses the session's key and pinned host key
+- **The VNC password stays on the server** — the relay does the VNC login and
+  hands the browser an already-authenticated desktop, so the password is never
+  sent to the page
+- **Supported logins:** no password, and VNC password (what x11vnc, wayvnc,
+  KDE's krfb and most NAS consoles use). TigerVNC's default VeNCrypt/TLS is not;
+  set `SecurityTypes=VncAuth` on it and reach it through an SSH tunnel for
+  encryption
+
+A minimal server for a Linux desktop, reachable only through SSH:
+
+```bash
+x11vnc -display :0 -localhost -rfbport 5900 -usepw -forever -shared
+```
+
+Then add a **VNC** profile with Host `localhost`, Port `5900`, the password
+from `x11vnc -storepasswd`, and **Connect** set to that machine's SSH session.
+
 ### Files
 
 - **A file browser per pane** — browse, filter, rename, delete, make folders,
@@ -106,6 +133,7 @@ connect or fail, so it never makes the burst that restoring avoids.
 | UI | Python in the browser (Pyodide) + wapyt widgets |
 | Backend | pytincture (FastAPI) + Uvicorn |
 | SSH/SFTP | Paramiko |
+| VNC | noVNC 1.7 (vendored), with the RFB login done server-side |
 | FTP/FTPS | ftplib, behind a paramiko-shaped adapter |
 | Telnet | asyncio + an RFC 854/1073 IAC parser |
 | Auth | pytincture sessions + bcrypt |
@@ -360,6 +388,7 @@ resize path and the SFTP pool — everything else is unit-level. See
 | `narrow_pane_smoke.py` | the SFTP panel from 1200px down to 320px |
 | `tiled_smoke.py` | the grid, and switching layout modes |
 | `layout_smoke.py` | persistence, and that a restore dials nothing |
+| `vnc_smoke.py` | remote desktops, direct and tunnelled, with real pixels and input |
 | `server_save_smoke.py` | folder downloads saved on the server when there is no picker |
 | `windows_names_smoke.py` | Windows-safe folder download names, and Linux left alone |
 | `reconnect_all_smoke.py` | Reconnect all: the count, and that dials are sequential |

@@ -163,6 +163,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     private_key TEXT    NOT NULL DEFAULT '',
     description TEXT    NOT NULL DEFAULT '',
     host_key    TEXT    NOT NULL DEFAULT '',
+    via_session_id INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -190,6 +191,8 @@ def init_db() -> None:
             ("type", "TEXT NOT NULL DEFAULT 'ssh'"),
             ("folder", "TEXT NOT NULL DEFAULT ''"),
             ("host_key", "TEXT NOT NULL DEFAULT ''"),
+            # A VNC profile's SSH session to tunnel through; 0 means direct.
+            ("via_session_id", "INTEGER NOT NULL DEFAULT 0"),
         ):
             if column not in existing:
                 conn.execute(f"ALTER TABLE sessions ADD COLUMN {column} {definition}")

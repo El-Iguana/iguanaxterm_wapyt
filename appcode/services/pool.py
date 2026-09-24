@@ -213,8 +213,8 @@ def _dial(session: dict, session_id: int, user_id: int):
         return ftp_helpers.connect(
             session, on_learn_host_key=_persist_host_key(session_id, user_id)
         )
-    if session.get("type") == "telnet":
-        raise PermissionError("Telnet sessions have no file browser")
+    if session.get("type") in ("telnet", "vnc"):
+        raise PermissionError("This connection has no file browser")
     return ssh_helpers.connect(
         session, on_learn_host_key=_persist_host_key(session_id, user_id)
     )

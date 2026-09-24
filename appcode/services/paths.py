@@ -235,11 +235,20 @@ def file_icon(name: str, is_dir: bool = False, is_link: bool = False) -> str:
 # What each connection type can do. Imported by the browser (which tabs a pane
 # gets, the editor's default port) and by the server (validation, which
 # protocol the file pool dials), so the two can never disagree.
+#
+# ``desktop`` is a remote desktop over VNC. ``tunnel`` marks the types a VNC
+# profile may ride through: anything that logs in over SSH.
 SESSION_TYPES = {
-    "ssh": {"label": "SSH", "port": 22, "terminal": True, "files": True},
-    "telnet": {"label": "Telnet", "port": 23, "terminal": True, "files": False},
-    "sftp": {"label": "SFTP (files only)", "port": 22, "terminal": False, "files": True},
-    "ftp": {"label": "FTP (files only)", "port": 21, "terminal": False, "files": True},
+    "ssh": {"label": "SSH", "port": 22, "terminal": True, "files": True,
+            "desktop": False, "tunnel": True},
+    "telnet": {"label": "Telnet", "port": 23, "terminal": True, "files": False,
+               "desktop": False, "tunnel": False},
+    "sftp": {"label": "SFTP (files only)", "port": 22, "terminal": False, "files": True,
+             "desktop": False, "tunnel": True},
+    "ftp": {"label": "FTP (files only)", "port": 21, "terminal": False, "files": True,
+            "desktop": False, "tunnel": False},
+    "vnc": {"label": "VNC (remote desktop)", "port": 5900, "terminal": False, "files": False,
+            "desktop": True, "tunnel": False},
 }
 
 
@@ -254,6 +263,7 @@ def session_icon(session_type: str) -> str:
         "telnet": "mdi-console-network",
         "sftp": "mdi-folder-key-network",
         "ftp": "mdi-folder-network-outline",
+        "vnc": "mdi-monitor",
     }.get(session_type, "mdi-server")
 
 

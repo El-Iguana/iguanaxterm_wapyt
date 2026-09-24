@@ -23,7 +23,7 @@ import html
 import traceback
 
 import js
-from pyodide.ffi import create_proxy
+from pyodide.ffi import create_proxy, to_js
 
 from wapyt import filetransfer
 from wapyt import (
@@ -91,6 +91,9 @@ TERMINAL_THEME = TerminalTheme(
 # pre-auth connection before the next one arrives.
 _RECONNECT_WAIT_SECONDS = 15
 _RECONNECT_GAP_SECONDS = 0.3
+
+# noVNC is ~70 ES modules on first use; give a slow link time to fetch them.
+_NOVNC_LOAD_SECONDS = 30
 
 # How often a server-side folder save is polled for progress.
 _SAVE_POLL_SECONDS = 0.8
@@ -182,6 +185,7 @@ class IguanaXterm(MainWindow):
         self._restoring = False    # suppresses saves while rebuilding
         self._reconnecting_all = False
         self._reconnect_progress = ""  # the button's label while it runs
+        self._novnc_task = None         # noVNC's one-time loader, once started
         self._save_task = None
         self._grid = None          # the GridStack instance, once loaded
         self._grid_proxies: list = []
@@ -235,7 +239,7 @@ class IguanaXterm(MainWindow):
             '         alt="" width="40" height="40" decoding="async">'
             '    <div class="ix-brand-text">'
             '      <span class="ix-brand-name">IguanaXterm</span>'
-            '      <span class="ix-brand-sub">SSH &middot; Telnet &middot; SFTP &middot; FTP</span>'
+            '      <span class="ix-brand-sub">SSH &middot; Telnet &middot; SFTP &middot; FTP &middot; VNC</span>'
             '    </div>'
             '  </div>'
             '  <div class="ix-sidebar-tree" id="ix-tree-host"></div>'
@@ -354,6 +358,14 @@ class IguanaXterm(MainWindow):
                 self._pane_select(pane_tab.dataset.pane, pane_tab.dataset.paneTab)
                 return
 
+            cad = event.target.closest("[data-pane-cad]")
+            if cad:
+                pane = self._panes.get(cad.dataset.paneCad)
+                if pane and pane.get("rfb") is not None:
+                    pane["rfb"].sendCtrlAltDel()
+                    pane["rfb"].focus()
+                return
+
             maximizer = event.target.closest("[data-pane-max]")
             if maximizer:
                 self._toggle_maximize(maximizer.dataset.paneMax)
@@ -384,7 +396,8 @@ class IguanaXterm(MainWindow):
             if event.key != "Escape" or not self._maximized:
                 return
             target = event.target
-            if target and hasattr(target, "closest") and target.closest(".wapyt-terminal"):
+            # The same goes for a remote desktop: Escape is the remote's key.
+            if target and hasattr(target, "closest") and target.closest(".wapyt-terminal, .ix-vnc"):
                 return
             self._toggle_maximize(self._maximized)
 
@@ -568,7 +581,7 @@ class IguanaXterm(MainWindow):
         if focus == "files" and not caps["files"]:
             self._toast("This connection has no file browser.")
             focus = "terminal"
-        if focus == "terminal" and not caps["terminal"]:
+        if focus == "terminal" and not caps["terminal"] and not caps["desktop"]:
             focus = "files"  # SFTP and FTP profiles are files only
 
         self._tab_counter += 1
@@ -595,8 +608,11 @@ class IguanaXterm(MainWindow):
             "dialled": False,
             "has_terminal": caps["terminal"],
             "has_files": caps["files"],
+            # A remote desktop lives in the terminal panel, as a noVNC canvas.
+            "has_desktop": caps["desktop"],
+            "rfb": None,
             # Set for real by _pane_select once the pane is dialled.
-            "tab": "terminal" if caps["terminal"] else "files",
+            "tab": "terminal" if caps["terminal"] or caps["desktop"] else "files",
             "files_mounted": False,
             # A brand-new pane carries a size but no position, so GridStack
             # auto-places it. Giving it x=0,y=0 -- which a default geometry
@@ -622,7 +638,7 @@ class IguanaXterm(MainWindow):
 
         if connect:
             self._connect_pane(pane_id)
-            if focus == "files" and caps["terminal"]:
+            if focus == "files" and caps["terminal"] and caps["files"]:
                 self._pane_select(pane_id, "files")
         else:
             self._show_reconnect(pane_id, session)
@@ -645,6 +661,11 @@ class IguanaXterm(MainWindow):
         # waits on it before starting the next one.
         pane["settled"] = asyncio.get_event_loop().create_future()
         self._sync_reconnect_all()
+
+        if pane["has_desktop"]:
+            pane.pop("restore", None)
+            _spawn(self._mount_desktop(pane_id), "remote desktop")
+            return
 
         if not pane["has_terminal"]:
             # A files-only pane "dials" by opening its file browser. The
@@ -681,6 +702,116 @@ class IguanaXterm(MainWindow):
         else:
             terminal.fit()
             terminal.focus()
+
+    async def _ensure_novnc(self) -> bool:
+        """
+        Load noVNC the first time a desktop opens, once, however many do.
+
+        It is ES modules, so it goes in through a <script type="module"> that
+        imports RFB and parks it on window (static/novnc-loader.js). A shared
+        task, because a restored layout can mount several desktops at once and
+        each would otherwise add its own copy of the loader.
+        """
+        if getattr(js.window, "IxRFB", None):
+            return True
+        if self._novnc_task is None:
+            self._novnc_task = asyncio.ensure_future(self._load_novnc())
+        loaded = await asyncio.shield(self._novnc_task)
+        if not loaded:
+            self._novnc_task = None  # let a later attempt retry
+            self._toast("Could not load the remote desktop viewer.")
+        return loaded
+
+    async def _load_novnc(self) -> bool:
+        """
+        Add the loader module and wait for ``window.IxRFB``.
+
+        Not ``_load_asset``: its future hangs on the ``load`` event, and for this
+        module script that event never reached the Python side, even though
+        the module ran. Waiting for the global it sets is the condition that
+        actually matters; ``error`` still fails fast.
+        """
+        failed = {"yes": False}
+        script = js.document.createElement("script")
+        script.type = "module"
+        script.src = "/static/novnc-loader.js"
+        script.addEventListener("error", create_proxy(lambda *_a: failed.update(yes=True)))
+        js.document.head.appendChild(script)
+        for _ in range(int(_NOVNC_LOAD_SECONDS / 0.1)):
+            if getattr(js.window, "IxRFB", None):
+                return True
+            if failed["yes"]:
+                return False
+            await asyncio.sleep(0.1)
+        return False
+
+    async def _mount_desktop(self, pane_id: str) -> None:
+        """
+        Open a remote desktop in the pane's panel.
+
+        noVNC talks RFB over /ws/vnc/<id>; the server does the VNC login and the
+        tunnel, so the page never holds the password (see vnc_ws.py). The
+        viewport scales to the tile, so resizing a tile resizes the picture,
+        not the remote screen.
+        """
+        pane = self._panes.get(pane_id)
+        host = js.document.getElementById(f"pane-term-{pane_id}")
+        if pane is None or not host or not await self._ensure_novnc():
+            self._settle(pane_id)
+            return
+        host.innerHTML = '<div class="ix-vnc" tabindex="-1"></div>'
+        screen = host.querySelector(".ix-vnc")
+        scheme = "wss" if str(js.location.protocol) == "https:" else "ws"
+        url = f"{scheme}://{js.location.host}/ws/vnc/{pane['session_id']}"
+        options = to_js({"wsProtocols": ["binary"]}, dict_converter=js.Object.fromEntries)
+        rfb = js.window.IxRFB.new(screen, url, options)
+        rfb.scaleViewport = True
+        rfb.resizeSession = False
+        rfb.focusOnClick = True
+        rfb.background = "#0b1220"
+        pane["rfb"] = rfb
+
+        def _on_connect(_event) -> None:
+            self._settle(pane_id)
+
+        def _on_disconnect(event) -> None:
+            self._settle(pane_id)
+            current = self._panes.get(pane_id)
+            if current is None or current.get("closing"):
+                return
+            # Dropped, refused or never reached: offer the same Reconnect a
+            # restored pane has, and count it in Reconnect all again.
+            clean = bool(getattr(event.detail, "clean", False))
+            current["rfb"] = None
+            current["dialled"] = False
+            session = self._session(current["session_id"])
+            if session:
+                self._show_reconnect(pane_id, session)
+            # noVNC fires securityfailure, then disconnect. The first carries
+            # the reason (a refused password, an unreachable host); a generic
+            # "disconnected" here would replace it before anyone could read it.
+            refused = current.pop("refused", "")
+            if refused:
+                self._toast(f"{current['name']}: {refused}")
+            elif not clean:
+                self._toast(f"{current['name']}: the remote desktop disconnected.")
+            self._sync_reconnect_all()
+
+        def _on_security_failure(event) -> None:
+            # The relay turns a refused VNC login into this, with the reason.
+            reason = str(getattr(event.detail, "reason", "") or "Login refused")
+            current = self._panes.get(pane_id)
+            if current is not None:
+                current["refused"] = reason   # shown by the disconnect that follows
+
+        for name, handler in (
+            ("connect", _on_connect),
+            ("disconnect", _on_disconnect),
+            ("securityfailure", _on_security_failure),
+        ):
+            proxy = create_proxy(handler)
+            pane.setdefault("proxies", []).append(proxy)
+            rfb.addEventListener(name, proxy)
 
     def _show_reconnect(self, pane_id: str, session: dict) -> None:
         """
@@ -725,13 +856,30 @@ class IguanaXterm(MainWindow):
             label = f"{label}:{port}"
         if not caps["terminal"]:
             label = f"{session.get('type', '').upper()} {label}"
+        tunnel = self._session(int(session.get("via_session_id") or 0))
+        if caps["desktop"] and tunnel:
+            label = f"{label} via {tunnel['name']}"
+        label = html.escape(label)  # names and hosts are stored text
 
         files_attrs = (
             "" if caps["files"] else ' disabled title="This connection has no file browser."'
         )
         # A files-only pane keeps the Terminal panel (the Reconnect placeholder
-        # lives there) but not a button that could switch to it.
-        term_attrs = "" if caps["terminal"] else " hidden"
+        # lives there) but not a button that could switch to it. A desktop pane
+        # uses that same panel for its screen, and has no Files at all.
+        term_attrs = "" if caps["terminal"] or caps["desktop"] else " hidden"
+        if caps["desktop"]:
+            files_attrs = " hidden"
+        term_icon, term_label = (
+            ("mdi-monitor", "Desktop") if caps["desktop"] else ("mdi-console-line", "Terminal")
+        )
+        # Ctrl+Alt+Del cannot be typed into a browser tab: the OS takes it.
+        cad = (
+            f'    <button type="button" class="ix-pane-cad" data-pane-cad="{pane_id}"'
+            f'            title="Send Ctrl+Alt+Del to the remote desktop">'
+            f'      <span class="mdi mdi-keyboard-variant"></span><span>Ctrl+Alt+Del</span></button>'
+            if caps["desktop"] else ""
+        )
         return (
             f'<div class="ix-pane" data-pane="{pane_id}">'
             f'  <div class="ix-pane-tabs">'
@@ -741,11 +889,12 @@ class IguanaXterm(MainWindow):
             f'      <span class="ix-pane-name-text">{name}</span></span>'
             f'    <button type="button" class="ix-pane-tab" data-pane-tab="terminal"'
             f'            data-pane="{pane_id}" aria-selected="true"{term_attrs}>'
-            f'      <span class="mdi mdi-console-line"></span><span>Terminal</span></button>'
+            f'      <span class="mdi {term_icon}"></span><span>{term_label}</span></button>'
             f'    <button type="button" class="ix-pane-tab" data-pane-tab="files"'
             f'            data-pane="{pane_id}" aria-selected="false"{files_attrs}>'
             f'      <span class="mdi mdi-folder-network"></span><span>Files</span></button>'
             f'    <span class="ix-pane-spacer"></span>'
+            f'{cad}'
             f'    <span class="ix-pane-host" title="{label}">{label}</span>'
             f'    <button type="button" class="ix-pane-max" data-pane-max="{pane_id}"'
             f'            title="Maximize this pane" aria-pressed="false">'
@@ -788,6 +937,8 @@ class IguanaXterm(MainWindow):
             if pane["terminal"] is not None:
                 pane["terminal"].fit()
                 pane["terminal"].focus()
+            elif pane.get("rfb") is not None:
+                pane["rfb"].focus()
         elif not pane["files_mounted"]:
             # Mounted on first use, so a pane that is only ever a terminal never
             # dials SFTP at all.
@@ -889,6 +1040,9 @@ class IguanaXterm(MainWindow):
         # was never dialled has nothing to close.
         if pane["terminal"] is not None:
             pane["terminal"].destroy()
+        if pane.get("rfb") is not None:
+            pane["closing"] = True    # so its disconnect is not offered a Reconnect
+            pane["rfb"].disconnect()
 
         sftp = self._sftp_tabs.pop(pane_id, None)
         if sftp is not None:
@@ -2036,10 +2190,10 @@ class IguanaXterm(MainWindow):
             ModalConfig(
                 title="Edit session" if session_id else "New session",
                 width=560,
-                # What the nine fields plus the action row actually measure.
+                # What the ten fields plus the action row actually measure.
                 # At 640 the Save button sat below the fold; short screens
                 # still clamp to max-height and scroll.
-                height=740,
+                height=820,
             )
         )
 
@@ -2086,6 +2240,17 @@ class IguanaXterm(MainWindow):
                                      + (" Stored key in place." if has_key else ""),
                                 placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
                                             if not has_key else "Stored — leave blank to keep"),
+                    FieldConfig(id="via_session_id", label="Connect", type="select",
+                                span=2, value=str(existing.get("via_session_id") or 0),
+                                help="For VNC. A tunnel reaches a desktop that only "
+                                     "listens on its own machine; give Host as seen "
+                                     "from there, usually localhost.",
+                                options=[SelectOption("0", "Directly")] + [
+                                    SelectOption(str(s["id"]), f"Through SSH session “{s['name']}”")
+                                    for s in self._sessions
+                                    if session_caps(s.get("type")).get("tunnel")
+                                    and s["id"] != session_id
+                                ]),
                     FieldConfig(id="description", label="Description",
                                 value=existing.get("description", ""), span=2),
                 ],
@@ -2097,14 +2262,22 @@ class IguanaXterm(MainWindow):
             if payload.get("id") != "session_type":
                 return
             # Each type has its own default port. Telnet has no user or key
-            # auth, and FTP has a user and password but no key.
+            # auth, FTP has a user and password but no key, and VNC has only a
+            # password -- plus the choice of tunnel, which nothing else uses.
             session_type = payload.get("value") or "ssh"
             form.set_values({"port": session_caps(session_type)["port"]})
-            for field in ("password", "username"):
+            _apply_type(session_type)
+
+        def _apply_type(session_type: str) -> None:
+            for field in ("password",):
                 form.set_field_disabled(field, session_type == "telnet")
-            form.set_field_disabled("private_key", session_type in ("telnet", "ftp"))
+            form.set_field_disabled("username", session_type in ("telnet", "vnc"))
+            form.set_field_disabled("private_key", session_type in ("telnet", "ftp", "vnc"))
+            form.set_field_disabled("via_session_id", session_type != "vnc")
 
         form.on_change(_on_type_change)
+        # An existing profile opens with its own type's fields, not SSH's.
+        _apply_type(existing.get("type", "ssh"))
         form.on_cancel(lambda _payload: modal.hide())
 
         def _on_submit(values: dict) -> None:
@@ -2122,6 +2295,7 @@ class IguanaXterm(MainWindow):
                     "session_type": values.get("session_type", "ssh"),
                     "folder": values.get("folder") or "",
                     "description": values.get("description") or "",
+                    "via_session_id": int(values.get("via_session_id") or 0),
                 }
                 # An empty secret field means "unchanged" when one is stored,
                 # and the service's sentinel default expresses that by omission.
@@ -2505,10 +2679,18 @@ _PANE_CSS = """
 .ix-pane-body{position:relative;flex:1 1 auto;min-height:0;}
 .ix-pane-panel{position:absolute;inset:0;min-width:0;min-height:0;}
 .ix-pane-panel[hidden],.ix-pane-tab[hidden]{display:none;}
+/* A remote desktop: noVNC's canvas scales to fill this, letterboxed. */
+.ix-vnc{position:absolute;inset:0;background:#0b1220;overflow:hidden;outline:none;}
+.ix-pane-cad{display:inline-flex;align-items:center;gap:5px;margin-right:6px;
+  padding:3px 9px;color:#94a3b8;background:transparent;border:1px solid #334155;
+  border-radius:6px;cursor:pointer;font:11px system-ui,sans-serif;white-space:nowrap;}
+.ix-pane-cad:hover{background:#1f2937;color:#e2e8f0;}
+.ix-pane-cad .mdi{font-size:14px;}
 /* A narrow pane drops the tab labels to icons. */
 @container (max-width: 420px){
   .ix-pane-tab span:not(.mdi){display:none;}
   .ix-pane-host{display:none;}
+  .ix-pane-cad span:not(.mdi){display:none;}
 }
 """
 

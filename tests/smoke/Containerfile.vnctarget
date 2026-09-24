@@ -1,0 +1,37 @@
+# Throwaway remote-desktop target for vnc_smoke.py. Weak, fixed credentials on
+# purpose: it listens on loopback only and is torn down after.
+#
+#   :5900  x11vnc, VNC password "vncpass"   -- published: the "direct" case
+#   :5901  x11vnc, no password, localhost    -- NOT published: reachable only
+#          through an SSH tunnel, the way a real desktop should be
+#   :22    sshd, testuser/testpass, TCP forwarding on -- the tunnel
+#
+# -noreset: an X server resets when its last client leaves, and xsetroot exits
+# the moment it has set the colour -- without it the root went back to black
+# whenever xsetroot happened to be the only client.
+#
+# A restart keeps /tmp, so the start script clears Xvfb's lock first -- a stale
+# /tmp/.X1-lock makes Xvfb refuse to start and nothing after it ever runs.
+#
+# The screen is two known colours so a test can check real pixels: the root
+# window is #2a6f97, and an xterm filled #f2c14e sits at (100,100).
+FROM docker.io/library/alpine:3.20
+
+RUN apk add --no-cache xvfb x11vnc xterm xsetroot font-misc-misc openssh-server shadow \
+    && ssh-keygen -A \
+    && adduser -D -s /bin/sh testuser \
+    && echo 'testuser:testpass' | chpasswd \
+    && sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config \
+    && sed -i 's/^#*AllowTcpForwarding.*/AllowTcpForwarding yes/' /etc/ssh/sshd_config \
+    && printf '%s\n' \
+       'rm -f /tmp/.X1-lock /tmp/.X11-unix/X1' \
+       'Xvfb :1 -screen 0 1024x768x24 -nolisten tcp -noreset &' \
+       'for i in 1 2 3 4 5 6 7 8 9 10; do [ -e /tmp/.X11-unix/X1 ] && break; sleep 0.5; done' \
+       "until DISPLAY=:1 xsetroot -solid '#2a6f97' 2>/dev/null; do sleep 0.3; done" \
+       "DISPLAY=:1 xterm -geometry 60x12+100+100 -bg '#f2c14e' -fg black &" \
+       'x11vnc -display :1 -rfbport 5900 -passwd vncpass -forever -shared -bg -o /tmp/x11vnc-5900.log' \
+       'x11vnc -display :1 -rfbport 5901 -localhost -nopw -forever -shared -bg -o /tmp/x11vnc-5901.log' \
+       'exec /usr/sbin/sshd -D -e' > /start.sh
+
+EXPOSE 22 5900
+CMD ["/bin/sh", "/start.sh"]

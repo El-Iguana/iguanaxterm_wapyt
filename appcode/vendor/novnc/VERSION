@@ -1,0 +1,5 @@
+noVNC 1.7.0, unmodified, from the npm package @novnc/novnc.
+Tarball sha512-ucEJOx4T2avIRCleodk7YobZj5O2Ga2AeLfQ69A/yjG9HHba2+PDgwSkN3FttrmG+70ZGx21sElNFouK13RzyA==
+(matches the registry's dist.integrity). MPL-2.0 -- see LICENSE.txt; pako is MIT
+(vendor/pako/LICENSE). Only core/ and vendor/ are vendored; app/ and the
+standalone viewer are not needed.

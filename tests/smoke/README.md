@@ -74,6 +74,34 @@ with `.focus()` rather than a click. And a maximized tile covers its
 neighbours, so the other tile's button is unreachable until you restore —
 the test takes the path a person would.
 
+## VNC smoke
+
+`vnc_smoke.py` runs against `Containerfile.vnctarget`: Xvfb with two
+`x11vnc` servers and `sshd`. One VNC server is published on 5900 with the
+password `vncpass`. The other listens only on the container's own localhost at
+5901, so SSH is the only way in:
+
+```bash
+podman build -t iguanaxterm-vnctest -f tests/smoke/Containerfile.vnctarget tests/smoke
+podman run -d --name ix-vnctest -p 127.0.0.1:5900:5900 -p 127.0.0.1:2223:22 iguanaxterm-vnctest
+python3 tests/smoke/vnc_smoke.py
+```
+
+The remote screen is two known colours, and the checks read **real pixels** off
+noVNC's canvas. Input is proven the same way: the test clicks into the remote
+xterm and types `xsetroot -solid '#00aa00'`, then waits for the root window to
+turn green. The same screen is read through the tunnel, the unpublished port
+must fail directly, and a wrong password must show x11vnc's own reason. The
+test also watches every request and WebSocket frame the page sends, and fails
+if the VNC password appears in any of them.
+
+Two lessons from the target itself. Xvfb needs `-noreset`: an X server resets
+when its last client leaves, and `xsetroot` exits as soon as it has set the
+colour. And the start script clears `/tmp/.X1-lock`, because a restarted
+container keeps `/tmp`, and a stale lock stops Xvfb and everything after it.
+The test clears `vnc-ssh`'s pinned host key first: a rebuilt target has new
+SSH keys, and the tunnel correctly refuses a changed one.
+
 ## Server save smoke
 
 `server_save_smoke.py` removes the File System Access pickers from Chromium,

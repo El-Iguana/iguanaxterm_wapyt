@@ -114,7 +114,9 @@ with sync_playwright() as p:
     check("FTP" in page.inner_text(f'.ix-pane[data-pane="{pane}"] .ix-pane-host'),
           "pane header names the protocol",
           page.inner_text(f'.ix-pane[data-pane="{pane}"] .ix-pane-host'))
-    check(rows(page, pane) == ["share"], "home directory listed over FTPS", str(rows(page, pane)))
+    # "share" is ours; other smokes (large_upload) leave files on the same
+    # target, so demand our folder, not an otherwise empty home.
+    check("share" in rows(page, pane), "home directory listed over FTPS", str(rows(page, pane)))
     check(page.evaluate("window.__terminalSockets") == 0, "no terminal socket was opened")
 
     page.locator(f"#pane-files-{pane} td[data-column-id='name']:has-text('share')").dblclick()

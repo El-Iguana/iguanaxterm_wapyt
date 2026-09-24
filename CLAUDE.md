@@ -237,6 +237,38 @@ Not handled: files that already exist in the chosen destination are still
 overwritten, as on every platform, and Windows' 260-character path limit is not
 checked.
 
+### Remote desktops: noVNC in the page, the VNC login on the server
+
+A `vnc` session opens a Desktop pane: noVNC 1.7, vendored unmodified at
+`appcode/vendor/novnc` (MPL-2.0, integrity-checked, see its `VERSION`),
+served at `/novnc`. It is loaded on first use by `static/novnc-loader.js`, a
+module that imports `RFB` and sets `window.IxRFB`.
+
+- **The password never reaches the browser.** `/ws/vnc/<id>` (`vnc_ws.py`)
+  logs in to the VNC server itself (`rfb.server_handshake`: RFB 3.3/3.7/3.8,
+  None or VNC Authentication), then offers noVNC a 3.8 server with only
+  "None". After the security handshake the protocol is version-independent,
+  so the relay just copies bytes. A refused login is sent to noVNC as a 3.8
+  failure with the reason, so the page shows the server's own words.
+- **VNC Authentication is DES with bit-reversed key bytes**, and only the
+  first 8 characters count. cryptography only has DES as `TripleDES` in
+  `decrepit`, and it is deprecating 8-byte keys, so the key is passed three
+  times: E-D-E under one key is single DES. A check against a real `x11vnc`
+  proved it; a fake server using the same function would prove nothing.
+- **Tunnels.** `via_session_id` names an SSH or SFTP session. The relay logs
+  in with it (its key, its pinned host key) and opens `direct-tcpip` to
+  `host:port` as seen from there. Deleting the tunnel session leaves the
+  desktop pointing at it, and the desktop says so rather than going direct.
+- **noVNC fires `securityfailure` and then `disconnect`.** The reason is kept on
+  the pane and shown by the disconnect handler; toasting in both meant the
+  generic "disconnected" replaced the reason. A dropped desktop goes back to a
+  Reconnect placeholder and counts in Reconnect all again.
+- **Do not wait on a module script's `load` event from Pyodide.** It never
+  reached the Python future here, even though the module ran. The loader waits
+  for `window.IxRFB` instead, with a timeout, and fails fast on `error`.
+- Escape is left to the remote inside `.ix-vnc`, as it is inside a terminal.
+  Ctrl+Alt+Del has a header button, because the OS takes it before the page.
+
 ### Folder downloads without a folder picker are saved on the server
 
 Firefox has no File System Access pickers, and no browser offers them on a

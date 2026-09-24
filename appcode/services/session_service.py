@@ -23,7 +23,8 @@ from services.paths import SESSION_TYPES
 
 # Columns that are safe to hand to the browser.
 _PUBLIC_COLUMNS = (
-    "id, user_id, name, folder, type, host, port, username, description, created_at"
+    "id, user_id, name, folder, type, host, port, username, description, "
+    "via_session_id, created_at"
 )
 
 _SENTINEL_UNCHANGED = "\x00unchanged\x00"
@@ -112,6 +113,7 @@ class SessionService:
         description: str = "",
         password: str = _SENTINEL_UNCHANGED,
         private_key: str = _SENTINEL_UNCHANGED,
+        via_session_id: Optional[int] = 0,
     ) -> dict:
         """
         Create or update a profile.
@@ -130,8 +132,22 @@ class SessionService:
         host = host.strip()
         folder = folder.strip()
         port = int(port)
+        # Only a desktop rides a tunnel; any other type drops the setting.
+        via = int(via_session_id or 0) if session_type == "vnc" else 0
 
         with get_db() as conn:
+            if via:
+                tunnel = conn.execute(
+                    "SELECT type FROM sessions WHERE id = ? AND user_id = ?",
+                    (via, self._user_id),
+                ).fetchone()
+                if (
+                    tunnel is None
+                    or via == int(session_id or 0)
+                    or not SESSION_TYPES.get(tunnel["type"], {}).get("tunnel")
+                ):
+                    return {"ok": False, "errors": {
+                        "via_session_id": "Choose one of your SSH or SFTP sessions"}}
             if session_id:
                 owned = conn.execute(
                     "SELECT id FROM sessions WHERE id = ? AND user_id = ?",
@@ -142,10 +158,10 @@ class SessionService:
 
                 assignments = [
                     "name = ?", "host = ?", "port = ?", "username = ?",
-                    "type = ?", "folder = ?", "description = ?",
+                    "type = ?", "folder = ?", "description = ?", "via_session_id = ?",
                 ]
                 values: list[Any] = [
-                    name, host, port, username, session_type, folder, description,
+                    name, host, port, username, session_type, folder, description, via,
                 ]
                 if password != _SENTINEL_UNCHANGED:
                     assignments.append("password = ?")
@@ -178,11 +194,11 @@ class SessionService:
                 cursor = conn.execute(
                     "INSERT INTO sessions "
                     "(user_id, name, host, port, username, type, folder, description, "
-                    " password, private_key) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " via_session_id, password, private_key) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         self._user_id, name, host, port, username, session_type,
-                        folder, description,
+                        folder, description, via,
                         encrypt("" if password == _SENTINEL_UNCHANGED else password),
                         encrypt("" if private_key == _SENTINEL_UNCHANGED else private_key),
                     ),

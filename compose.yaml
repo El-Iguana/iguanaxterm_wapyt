@@ -34,6 +34,8 @@ services:
       - GANXTERM_CANONICAL_ORIGIN=${GANXTERM_CANONICAL_ORIGIN:-http://127.0.0.1:8765}
       - GANXTERM_ALLOWED_HOSTS=${GANXTERM_ALLOWED_HOSTS:-}
       - GANXTERM_DOWNLOAD_DIR=/downloads
+      # For messages only: where /downloads is on the host.
+      - GANXTERM_DOWNLOAD_HOST_DIR=${GANXTERM_DOWNLOAD_HOST_DIR:-~/Downloads/IguanaXterm}
     volumes:
       # :U re-owns the volume to the mapped user above.
       - ganxterm_data:/data:U

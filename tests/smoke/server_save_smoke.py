@@ -78,6 +78,12 @@ with sync_playwright() as p:
     )
     page.click(f'.ix-pane-tab[data-pane="{pane}"][data-pane-tab="files"]')
     page.wait_for_selector(f"#pane-files-{pane} td[data-column-id='name']", timeout=30000)
+    page.wait_for_function(
+        "(p) => (document.querySelector(`#note-${p} .ix-sftp-note-text`) || {}).textContent",
+        arg=pane, timeout=15000)
+    note = page.inner_text(f"#note-{pane} .ix-sftp-note-text")
+    check("cannot choose where to save" in note and str(DOWNLOADS) in note,
+          "the panel says up front that folders are saved on the server, and where", repr(note))
     page.click(f'#pane-files-{pane} .ix-sftp-btn[data-sftp="refresh"]')
     page.wait_for_timeout(1500)
 
@@ -97,11 +103,12 @@ with sync_playwright() as p:
         name: r.querySelector('.ix-queue-name').innerText,
         state: r.dataset.state || '',
         status: r.querySelector('.ix-queue-status').innerText}))""")
-    check(queue and queue[-1]["name"] == "savetest → server" and queue[-1]["state"] == "done",
-          "queue row for the folder finished", str(queue[-1] if queue else queue))
+    check(queue and queue[-1]["name"] == "savetest → server" and queue[-1]["state"] == "done"
+          and str(DOWNLOADS / "savetest") in queue[-1]["status"],
+          "queue row finished, naming where on disk", str(queue[-1] if queue else queue))
     toast = page.inner_text("#ix-toast")
-    check("Saved 4 file(s) on the server" in toast and "savetest" in toast,
-          "toast says where it went", repr(toast))
+    check(str(DOWNLOADS / "savetest") in toast and "4 file(s)" in toast,
+          "toast names the folder on disk it went to", repr(toast))
 
     saved = DOWNLOADS / "savetest"
     check((saved / "top.txt").read_text() == "top file"
@@ -143,6 +150,22 @@ with sync_playwright() as p:
 
     check(not errors, "no console errors", "; ".join(errors[:3]))
     page.keyboard.press("Escape")
+    reset_workspace(page)
+
+    # ── Brave: Chromium, with the dialog switched off ───────────────────────
+    brave = browser.new_context(viewport={"width": 1500, "height": 950})
+    brave.add_init_script(NO_PICKERS)
+    brave.add_init_script("navigator.brave = {isBrave: () => Promise.resolve(true)};")
+    page = brave.new_page()
+    login(page)
+    session_leaf(page).click()
+    page.click('.ix-toolbar-btn[data-action="sftp"]')
+    page.wait_for_selector(".wapyt-datatable-table tbody tr", timeout=30000)
+    page.wait_for_function(
+        "() => (document.querySelector('.ix-sftp-note-text') || {}).textContent", timeout=15000)
+    note = page.inner_text(".ix-sftp-note-text")
+    check("brave://flags/#file-system-access-api" in note and str(DOWNLOADS) in note,
+          "in Brave the note names the switch to flip, and where folders go meanwhile", repr(note))
     reset_workspace(page)
     browser.close()
 

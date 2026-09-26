@@ -227,3 +227,19 @@ def test_a_job_is_visible_only_to_its_owner(fake_pool):
     assert mine.status(job.id)["ok"] is True
     assert theirs.status(job.id)["ok"] is False
     assert theirs.cancel(job.id)["ok"] is False
+
+
+def test_a_job_says_where_it_saved_as_the_person_would_look(fake_pool, monkeypatch, download_dir):
+    """
+    Inside the container the folder is /downloads, which means nothing on the
+    desktop; the run script passes the host path it mounted there.
+    """
+    monkeypatch.setenv("GANXTERM_DOWNLOAD_HOST_DIR", "~/Downloads/IguanaXterm/")
+    job = _wait(downloads.start_job(USER, 1, "/src"))
+    assert job.view()["location"] == "~/Downloads/IguanaXterm/alice/src"
+    service = downloads.DownloadService(USER)
+    assert service.location() == {"ok": True, "location": "~/Downloads/IguanaXterm/alice"}
+
+    monkeypatch.delenv("GANXTERM_DOWNLOAD_HOST_DIR")
+    job = _wait(downloads.start_job(USER, 1, "/src"))
+    assert job.view()["location"] == f"{download_dir}/alice/src (2)", "the real path outside a container"

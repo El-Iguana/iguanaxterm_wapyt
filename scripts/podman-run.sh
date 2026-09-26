@@ -53,6 +53,7 @@ podman run -d \
   -e GANXTERM_DATA_DIR=/data \
   -e "GANXTERM_CANONICAL_ORIGIN=http://127.0.0.1:$PORT" \
   -e GANXTERM_DOWNLOAD_DIR=/downloads \
+  -e "GANXTERM_DOWNLOAD_HOST_DIR=${DOWNLOADS/#$HOME/\~}" \
   -v "$VOLUME:/data:U" \
   -v "$DOWNLOADS:/downloads:z" \
   "$IMAGE:latest" >/dev/null

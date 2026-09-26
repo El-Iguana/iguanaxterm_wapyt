@@ -31,6 +31,26 @@ def download_root() -> Path:
     return Path(os.environ.get("GANXTERM_DOWNLOAD_DIR") or DATA_DIR / "downloads")
 
 
+def display_root() -> str:
+    """
+    Where the downloads folder is *for the person*, for messages only.
+
+    Inside the container it is ``/downloads``, which means nothing on the
+    desktop. The run script passes the host folder it mounted there as
+    ``GANXTERM_DOWNLOAD_HOST_DIR`` (``~/Downloads/IguanaXterm``); without it
+    (running outside a container) the real path is the one to show.
+    """
+    return (os.environ.get("GANXTERM_DOWNLOAD_HOST_DIR") or str(download_root())).rstrip("/")
+
+
+def user_dir_name(user: dict) -> str:
+    """This user's folder name inside the downloads folder."""
+    name = str((user or {}).get("username") or "")
+    if not is_safe_name(name) or name.startswith("."):
+        name = f"user-{current_user_id(user)}"
+    return name
+
+
 def user_root(user: dict) -> Path:
     """
     This user's downloads directory, created on first use.
@@ -38,10 +58,7 @@ def user_root(user: dict) -> Path:
     Named after the username so it reads sensibly on the host, falling back to
     the id for a name that is not a safe single path segment.
     """
-    name = str((user or {}).get("username") or "")
-    if not is_safe_name(name) or name.startswith("."):
-        name = f"user-{current_user_id(user)}"
-    root = download_root() / name
+    root = download_root() / user_dir_name(user)
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -73,7 +90,8 @@ def free_name(parent: Path, name: str) -> Path:
 
 
 class _Job:
-    def __init__(self, user_id: int, session_id: int, remote: str, local: Path, root: Path) -> None:
+    def __init__(self, user_id: int, session_id: int, remote: str, local: Path, root: Path,
+                 shown_root: str = "") -> None:
         self.id = uuid.uuid4().hex
         self.user_id = user_id
         self.session_id = session_id
@@ -90,6 +108,7 @@ class _Job:
         self.failed: list[dict] = []
         self.cancel = threading.Event()
         self.finished_at: Optional[float] = None
+        self.shown_root = shown_root  # the user's folder as the person sees it
 
     def view(self) -> dict:
         return {
@@ -97,6 +116,7 @@ class _Job:
             "state": self.state,
             "error": self.error,
             "folder": self.local.relative_to(self.root).as_posix(),
+            "location": f"{self.shown_root}/{self.local.relative_to(self.root).as_posix()}",
             "files_total": self.files_total,
             "bytes_total": self.bytes_total,
             "files_done": self.files_done,
@@ -215,7 +235,8 @@ def start_job(user: dict, session_id: int, remote: str) -> _Job:
     root = user_root(user)
     local = free_name(root, name)
     local.mkdir(parents=True)
-    job = _Job(user_id, int(session_id), remote.rstrip("/") or "/", local, root)
+    job = _Job(user_id, int(session_id), remote.rstrip("/") or "/", local, root,
+               shown_root=f"{display_root()}/{user_dir_name(user)}")
     with _jobs_lock:
         _jobs[job.id] = job
     threading.Thread(target=_run, args=(job, profile), daemon=True,

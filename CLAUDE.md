@@ -356,6 +356,19 @@ and **Saved files** in the toolbar browses it, fetches files back to the
 browser and deletes. Plain files in the same selection still go straight to
 the browser's downloads. Chrome and Edge are unchanged: they get the picker.
 
+- **Say why, and where to.** A Brave user, Chromium-based and used to getting
+  the picker, downloaded a folder, and it went quietly to
+  `~/Downloads/IguanaXterm/<user>/`. Brave has the File System Access API
+  switched off by default (`brave://flags/#file-system-access-api`). The
+  Files panel note now names the real reason: HTTPS, Brave's switch (detected
+  by `navigator.brave`), or a browser with no pickers at all. It also says
+  where folders will go. The queue row reads "saving on the server" at once,
+  and it and the toast end with the folder's **host** path. The container
+  only knows `/downloads`, so `podman-run.sh` passes the mounted folder as
+  `GANXTERM_DOWNLOAD_HOST_DIR` (with `~` for the home directory), for display
+  only.
+- In Pyodide, `js.navigator.brave` raises `AttributeError` where JS would
+  read `undefined`. Use `getattr(js.navigator, "brave", None)`.
 - **A job, not a stream.** pytincture caps a `@bff_stream` at 300 s total and
   30 s between items (`BFF_STREAM_MAX_SECONDS`, `..._IDLE_TIMEOUT_SECONDS`), and
   a folder of photos outlasts that. The copy runs on its own thread; the page

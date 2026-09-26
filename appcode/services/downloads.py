@@ -31,10 +31,12 @@ from services.auth import current_user_id
 from services.download_jobs import (  # noqa: F401  (re-exported for tests)
     _owned_job,
     _prune,
+    display_root,
     download_root,
     free_name,
     resolve_inside,
     start_job,
+    user_dir_name,
     user_root,
 )
 from services.paths import file_icon, format_mode, format_mtime, format_size
@@ -68,6 +70,12 @@ class DownloadService:
     def __init__(self, _user: dict = None) -> None:
         self._user = _user or {}
         self._user_id = current_user_id(self._user)
+
+    def location(self) -> dict:
+        """Where this user's saved folders are, as the person would look for them."""
+        if not self._user_id:
+            return {"ok": False, "error": "Not authenticated"}
+        return {"ok": True, "location": f"{display_root()}/{user_dir_name(self._user)}"}
 
     def start(self, session_id: int, path: str) -> dict:
         """Begin copying a remote folder into this user's downloads folder."""

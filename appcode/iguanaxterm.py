@@ -200,6 +200,7 @@ class IguanaXterm(MainWindow):
         self._reconnect_progress = ""  # the button's label while it runs
         self._novnc_task = None         # noVNC's one-time loader, once started
         self._paused_transfers: set = set()  # downloads waiting for Resume
+        self._saved_location = ""  # where server-side saves land, as the person sees it
         self._save_task = None
         self._grid = None          # the GridStack instance, once loaded
         self._grid_proxies: list = []
@@ -1695,16 +1696,39 @@ class IguanaXterm(MainWindow):
         text_el = note.querySelector(".ix-sftp-note-text")
         if not text_el or text_el.textContent:
             return
-        caps = filetransfer.capabilities()
-        if caps.pickers:
+        if filetransfer.capabilities().pickers:
             return
-        message = (
-            "This browser cannot choose a download location — files go to your "
-            "downloads folder. Chrome or Edge can."
-            if caps.secure_context
-            else "Destination picking needs HTTPS; downloads go to your "
-                 "downloads folder."
-        )
+        _spawn(self._fill_picker_note(note, text_el), "picker note")
+
+    async def _fill_picker_note(self, note, text_el) -> None:
+        """
+        Name the actual reason, and where things will go instead.
+
+        Brave is Chromium, so "use Chrome or Edge" misled: it has the dialog
+        and switches it off. Whatever the reason, say that folders are saved
+        on the server and where -- a folder download that silently lands in
+        ~/Downloads/IguanaXterm is exactly what went unexplained before.
+        """
+        if not self._saved_location:
+            answer = await DownloadService().location_async()
+            self._saved_location = answer.get("location", "") if answer.get("ok") else ""
+        where = self._saved_location or "the server's downloads folder"
+        instead = f"Files go to your downloads folder; folders are saved in {where}."
+        if not filetransfer.capabilities().secure_context:
+            message = f"Choosing where to save needs HTTPS (or 127.0.0.1). {instead}"
+        # getattr, not js.navigator.brave: a missing JS property raises
+        # AttributeError in Pyodide rather than reading as undefined.
+        elif getattr(js.navigator, "brave", None):
+            message = (
+                "Brave has the save dialog switched off: enable "
+                "brave://flags/#file-system-access-api and relaunch to choose "
+                f"where downloads go. Until then: {instead[0].lower()}{instead[1:]}"
+            )
+        else:
+            message = (
+                "This browser cannot choose where to save (Chrome, Edge and "
+                f"Chromium can). {instead}"
+            )
         text_el.textContent = message
         note.title = message
         note.dataset.shown = "true"
@@ -1956,6 +1980,10 @@ class IguanaXterm(MainWindow):
         )
         progress = self._queue_progress(tab_id, transfer_id)
         status = js.document.getElementById(f"st-{tab_id}-{transfer_id}")
+        # Say at once that this is not going where a browser download goes.
+        if status:
+            status.textContent = "saving on the server…"
+            status.title = f"Saving into {job.get('location', '')}"
 
         while job["state"] in ("walking", "copying"):
             if status and job["state"] == "walking":
@@ -1969,13 +1997,18 @@ class IguanaXterm(MainWindow):
                 return
             job = polled["job"]
 
-        where = f"Saved files › {job['folder']}"
+        # The place on disk, not just the app's own "Saved files": on a
+        # local install that is a folder in your home you can open.
+        where = job.get("location") or f"Saved files › {job['folder']}"
         if job["state"] == "done":
-            detail = f"{job['files_done']} file(s)"
+            detail = f"{job['files_done']} file(s) → {where}"
             if job["failed_count"]:
                 detail += f", {job['failed_count']} failed"
             self._queue_finish(tab_id, transfer_id, "done", detail)
-            self._toast(f"Saved {job['files_done']} file(s) on the server: {where}.")
+            self._toast(
+                f"This browser cannot choose a folder, so it was saved to {where} "
+                f"({job['files_done']} file(s)). Saved files lists it too."
+            )
         elif job["state"] == "cancelled":
             self._queue_finish(tab_id, transfer_id, "cancelled",
                                f"cancelled after {job['files_done']} file(s)")

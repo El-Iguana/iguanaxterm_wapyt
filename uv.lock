@@ -357,7 +357,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=42.0.0" },
     { name = "paramiko", specifier = ">=3.4.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "pytincture", git = "https://github.com/pytincture/pytincture.git?tag=v1.0.0rc8" },
+    { name = "pytincture", git = "https://github.com/pytincture/pytincture.git?tag=v1.0.0rc10" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
     { name = "wapyt", directory = "../wa_pytincture_widgetset" },
 ]
@@ -684,8 +684,8 @@ wheels = [
 
 [[package]]
 name = "pytincture"
-version = "1.0.0rc8"
-source = { git = "https://github.com/pytincture/pytincture.git?tag=v1.0.0rc8#bb59bd2b73fc356c13a2ed4ae36bb06acc66f047" }
+version = "1.0.0rc10"
+source = { git = "https://github.com/pytincture/pytincture.git?tag=v1.0.0rc10#1ceaeac5534804f30c9e3ed47422adebd4ba2e69" }
 dependencies = [
     { name = "fastapi" },
     { name = "itsdangerous" },

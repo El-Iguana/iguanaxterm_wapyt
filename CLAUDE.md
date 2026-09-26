@@ -13,7 +13,7 @@ mistakes are easy to repeat.
 
 Siblings under `~/Development/Pytinc/`, each with its own `CLAUDE.md`:
 
-- `pytincture/` — the framework (local `1.0.0rc8`).
+- `pytincture/` — the framework (pinned to tag `v1.0.0rc10`).
 - `wa_pytincture_widgetset/` — **wapyt**, the widgetset. This app added four
   widgets to it: `Terminal`, `Form`, `DataTable`, `Tree`.
 - `iguanaxterm_pyt/` — the abandoned dhxpyt attempt. Reference only.

@@ -1,0 +1,9 @@
+# Keep LF line endings on every platform. Windows Git (core.autocrlf=true)
+# would otherwise check shell scripts and .env.example out with CRLF, and a
+# "\r" at the end of an .env value becomes part of the value.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.png binary
+*.webp binary
+*.whl binary

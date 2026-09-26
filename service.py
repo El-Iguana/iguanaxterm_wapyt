@@ -63,6 +63,10 @@ from services.vnc_ws import router as vnc_router  # noqa: E402
 
 APPLICATION = "iguanaxterm"
 PORT = int(os.getenv("PORT", "8765"))
+# The address uvicorn listens on. With host networking (Linux) the container
+# would otherwise publish plain HTTP to the whole network, so
+# compose.host-network.yaml and podman-run.sh set 127.0.0.1.
+BIND = os.getenv("GANXTERM_BIND", "0.0.0.0")
 
 
 def canonical_origin() -> str:
@@ -298,4 +302,4 @@ if __name__ == "__main__":
 """,
         flush=True,
     )
-    uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
+    uvicorn.run(app, host=BIND, port=PORT, log_level="info")

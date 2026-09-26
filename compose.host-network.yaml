@@ -1,0 +1,49 @@
+# IguanaXterm on the host's network — Linux only (Docker Engine or Podman).
+#
+#   docker compose -f compose.host-network.yaml up -d --build
+#   podman compose -f compose.host-network.yaml up -d --build
+#
+# Use this instead of compose.yaml when the servers you connect to listen on
+# this machine's 127.0.0.1 only (a VM's forwarded SSH port, say): with host
+# networking, 127.0.0.1 inside the container *is* this machine. With
+# compose.yaml's bridge network, host.docker.internal reaches only services
+# listening beyond loopback (INSTALL.md, "Servers on the same computer").
+#
+# IguanaXterm then binds to 127.0.0.1 itself, so it is still not on the
+# network. Docker Desktop (Windows, macOS) and Podman machines run containers
+# in a VM, where host networking means the VM's network: use compose.yaml.
+
+name: iguanaxterm
+
+services:
+  iguanaxterm:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: localhost/iguanaxterm:latest
+    container_name: iguanaxterm
+    hostname: iguanaxterm
+    labels:
+      app: IguanaXterm
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - .env
+    environment:
+      GANXTERM_DATA_DIR: /data
+      GANXTERM_BIND: 127.0.0.1
+      PORT: ${GANXTERM_PORT:-8765}
+      GANXTERM_CANONICAL_ORIGIN: ${GANXTERM_CANONICAL_ORIGIN:-http://127.0.0.1:${GANXTERM_PORT:-8765}}
+      GANXTERM_ALLOWED_HOSTS: ${GANXTERM_ALLOWED_HOSTS:-}
+    volumes:
+      - iguanaxterm-data:/data
+    healthcheck:
+      test: ["CMD", "python", "manage.py", "health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
+
+volumes:
+  iguanaxterm-data:
+    name: iguanaxterm-data

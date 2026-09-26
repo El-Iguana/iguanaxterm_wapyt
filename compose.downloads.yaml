@@ -1,0 +1,25 @@
+# Save folders to a folder on this computer — Docker (Desktop or Engine).
+#
+#   docker compose -f compose.yaml -f compose.downloads.yaml up -d
+#
+# Without this, folders a browser cannot save itself go to the data volume and
+# are reached through "Saved files" in the app. The folder defaults to
+# ~/Downloads/IguanaXterm (one subfolder per user); set
+# GANXTERM_DOWNLOAD_HOST_DIR in .env to choose another.
+#
+# Docker Engine on Linux: the container runs as uid 10001, which must be able
+# to write the folder (INSTALL.md shows how).
+#
+# Not for Podman on Linux. That needs --userns=keep-id plus the :U volume
+# option, and podman compose drops :U when it runs through the Docker Compose
+# provider (measured: the data volume, created under the other user mapping,
+# came out read-only). INSTALL.md gives the podman run command instead.
+
+services:
+  iguanaxterm:
+    environment:
+      GANXTERM_DOWNLOAD_DIR: /downloads
+      # For messages only: where /downloads is on this computer.
+      GANXTERM_DOWNLOAD_HOST_DIR: ${GANXTERM_DOWNLOAD_HOST_DIR:-~/Downloads/IguanaXterm}
+    volumes:
+      - ${GANXTERM_DOWNLOAD_HOST_DIR:-~/Downloads/IguanaXterm}:/downloads

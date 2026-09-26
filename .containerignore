@@ -10,3 +10,6 @@ secret.key
 session.key
 tests/
 .pytest_cache/
+vendor-wheels/
+appcode/wapyt-*.whl
+data/

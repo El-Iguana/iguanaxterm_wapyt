@@ -1,5 +1,7 @@
 """Phase 1: panes carry their own Terminal and Files tabs, and two panes on one
 host do not fight over the pooled SFTP channel."""
+import os
+
 from playwright.sync_api import sync_playwright
 
 import sys as _sys, os as _os
@@ -7,7 +9,12 @@ _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 from harness import reset_workspace, session_leaf  # noqa: E402
 
 
-APP = "http://127.0.0.1:8799/iguanaxterm"
+# Overridable, so the same test can check an installed instance (INSTALL.md):
+# IX_APP, IX_PASS, and the SSH target as the *app* reaches it.
+APP = os.environ.get("IX_APP", "http://127.0.0.1:8799/iguanaxterm")
+SSH_HOST = os.environ.get("IX_SSH_HOST", "127.0.0.1")
+SSH_PORT = os.environ.get("IX_SSH_PORT", "2222")
+PASSWORD = os.environ.get("IX_PASS", "testpass123")
 results = []
 
 
@@ -25,8 +32,13 @@ def term_text(page, pane):
 
 
 with sync_playwright() as p:
-    b = p.chromium.launch(headless=True, args=["--no-sandbox"])
-    pg = b.new_page(viewport={"width": 1500, "height": 950})
+    # IX_CHROMIUM_ARGS / IX_INSECURE: for an instance behind a test proxy,
+    # e.g. "--host-resolver-rules=MAP terminal.test 127.0.0.1" and a
+    # self-signed certificate.
+    extra = os.environ.get("IX_CHROMIUM_ARGS", "")
+    b = p.chromium.launch(headless=True, args=["--no-sandbox", *([extra] if extra else [])])
+    pg = b.new_page(viewport={"width": 1500, "height": 950},
+                    ignore_https_errors=bool(os.environ.get("IX_INSECURE")))
     errs = []
     pg.on("pageerror", lambda e: errs.append(str(e)))
     pg.on("console", lambda m: errs.append(m.text) if m.type == "error" else None)
@@ -34,7 +46,7 @@ with sync_playwright() as p:
     pg.goto(APP, wait_until="domcontentloaded", timeout=30000)
     if "/login" in pg.url:
         pg.fill('input[name="email"]', "admin")
-        pg.fill('input[name="password"]', "testpass123")
+        pg.fill('input[name="password"]', PASSWORD)
         pg.click('input[type="submit"]')
     pg.wait_for_selector(".ix-toolbar", timeout=180000)
     reset_workspace(pg)
@@ -44,8 +56,8 @@ with sync_playwright() as p:
         pg.click('.ix-toolbar-btn[data-action="new"]')
         pg.wait_for_selector(".wapyt-modal-body .wapyt-form-body", timeout=30000)
         pg.fill('[name="name"]', "alpine-box")
-        pg.fill('[name="host"]', "127.0.0.1")
-        pg.fill('[name="port"]', "2222")
+        pg.fill('[name="host"]', SSH_HOST)
+        pg.fill('[name="port"]', SSH_PORT)
         pg.fill('[name="username"]', "testuser")
         pg.fill('[name="password"]', "testpass")
         pg.click(".wapyt-form-button-primary")

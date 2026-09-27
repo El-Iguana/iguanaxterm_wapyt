@@ -1,9 +1,17 @@
-# Local testing with Podman:
-#   podman compose up -d          (needs: systemctl --user enable --now podman.socket)
+# IguanaXterm with Docker Compose or Podman Compose, on Linux, Windows or
+# macOS. Full instructions: INSTALL.md.
 #
-# Without compose, which is what scripts/podman-run.sh does:
-#   podman build -t localhost/iguanaxterm:latest -f Containerfile .
-#   podman run -d --name iguanaxterm ...
+#   cp .env.example .env        # then set GANXTERM_ADMIN_PASS
+#   docker compose up -d --build        (or: podman compose up -d --build)
+#   open http://127.0.0.1:8765/iguanaxterm
+#
+# Folders a browser cannot save itself (Firefox has no folder picker) are
+# saved on the server, in the data volume, and listed under "Saved files".
+# To have them land in a folder on this computer instead: with Docker, add
+# compose.downloads.yaml; with Podman on Linux, use the podman run command in
+# INSTALL.md ("Saving folders to this computer").
+
+name: iguanaxterm
 
 services:
 
@@ -12,38 +20,38 @@ services:
       context: .
       dockerfile: Containerfile
     image: localhost/iguanaxterm:latest
-    # The container identifies itself as IguanaXterm in `podman ps`, in its own
-    # shell prompt, and in the app's sidebar.
+    # It identifies itself as IguanaXterm: container name, hostname, label.
     container_name: iguanaxterm
     hostname: iguanaxterm
     labels:
       app: IguanaXterm
     restart: unless-stopped
-    # Podman only. Makes the container's user (uid 10001, gid 999) be you on
-    # the host, so files saved into the downloads folder are yours.
-    userns_mode: "keep-id:uid=10001,gid=999"
-    ports:
-      # Loopback only. pytincture refuses authenticated plain HTTP anywhere
-      # else, so reaching this from another machine needs TLS and the two
-      # variables below.
-      - "127.0.0.1:8765:8765"
     env_file:
       - .env
     environment:
-      - GANXTERM_DATA_DIR=/data
-      - GANXTERM_CANONICAL_ORIGIN=${GANXTERM_CANONICAL_ORIGIN:-http://127.0.0.1:8765}
-      - GANXTERM_ALLOWED_HOSTS=${GANXTERM_ALLOWED_HOSTS:-}
-      - GANXTERM_DOWNLOAD_DIR=/downloads
-      # For messages only: where /downloads is on the host.
-      - GANXTERM_DOWNLOAD_HOST_DIR=${GANXTERM_DOWNLOAD_HOST_DIR:-~/Downloads/IguanaXterm}
+      GANXTERM_DATA_DIR: /data
+      # The browser-facing origin. Loopback only unless you put TLS in front
+      # (INSTALL.md, "Reaching IguanaXterm from other machines").
+      GANXTERM_CANONICAL_ORIGIN: ${GANXTERM_CANONICAL_ORIGIN:-http://127.0.0.1:${GANXTERM_PORT:-8765}}
+      GANXTERM_ALLOWED_HOSTS: ${GANXTERM_ALLOWED_HOSTS:-}
+    ports:
+      # 127.0.0.1 on purpose: pytincture only serves authenticated plain HTTP
+      # to a loopback address, and this holds your SSH credentials.
+      - "127.0.0.1:${GANXTERM_PORT:-8765}:8765"
+    extra_hosts:
+      # "host.docker.internal" reaches servers on this computer. Docker Desktop
+      # and Podman provide it already; this adds it on Docker Engine (Linux).
+      - "host.docker.internal:host-gateway"
     volumes:
-      # :U re-owns the volume to the mapped user above.
-      - ganxterm_data:/data:U
-      # Folder downloads a browser cannot write itself (Firefox, or any
-      # non-https origin). A dedicated folder: :z relabels it for SELinux.
-      - ${GANXTERM_DOWNLOAD_HOST_DIR:-~/Downloads/IguanaXterm}:/downloads:z
+      - iguanaxterm-data:/data
+    healthcheck:
+      test: ["CMD", "python", "manage.py", "health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
 
 volumes:
-  # Not iguanaxterm_data: that name is taken by a root-owned volume left over
-  # from the abandoned dhxpyt attempt, and this image runs as uid 10001.
-  ganxterm_data:
+  iguanaxterm-data:
+    # Named explicitly so it is the same whatever folder this was cloned into.
+    name: iguanaxterm-data

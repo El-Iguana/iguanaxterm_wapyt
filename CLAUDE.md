@@ -55,6 +55,48 @@ uv run python service.py            # http://127.0.0.1:8765/iguanaxterm
 uv run --with pytest python -m pytest tests/ -q
 ```
 
+Installing (users): **INSTALL.md** — `compose.yaml` on any OS with Docker or
+Podman, `compose.host-network.yaml` on Linux, `compose.downloads.yaml` (Docker)
+or a `podman run` recipe (Podman on Linux) to save folders to a host folder.
+`manage.py` is the admin CLI (`health`, `probe HOST PORT`, `users`,
+`reset-password`).
+
+### How the image is built (2026-09-26)
+
+Same design as Monguana's: the `Containerfile` builds from a plain clone — a
+stage clones wapyt at the pinned `WAPYT_REF` and builds both wheels (0.1.0 for
+the server, 99.99.99 with a regenerated manifest for the browser). Before
+this a fresh clone could not be built: both wheels were git-ignored and the
+README asked for a manual `uv build` into `vendor-wheels/`.
+`scripts/podman-run.sh` swaps in the sibling checkout with
+`--build-context wapyt-src=…`. **Bump `WAPYT_REF`** when the app needs newer
+wapyt.
+
+Traps measured writing INSTALL.md:
+
+- **`podman compose` (Docker Compose provider) drops the `:U` volume option**
+  (absent from the container's mount options), so a data volume created under
+  another user mapping stays *read-only*. The old `compose.yaml` relied on
+  `:U`. Keep-id host downloads on Podman are therefore a `podman run` recipe
+  (INSTALL.md §6), as `podman-run.sh` always did. Don't read
+  `podman inspect … .HostConfig.UsernsMode`: it says `private` even for a
+  working `--userns=keep-id` container — check file ownership instead.
+- **Without keep-id the container cannot write a host folder at all**
+  (uid 10001 vs a folder owned by you → *Permission denied*). Server-side
+  saves therefore default to `/data/downloads` in the volume, reached through
+  *Saved files*; a host folder is opt-in.
+- **Switching a volume between keep-id and the default mapping** gives
+  *attempt to write a readonly database*; `podman unshare chown -R 10001:999
+  <mountpoint>` fixes it (verified).
+- **From a bridge network `host.*.internal` does not reach 127.0.0.1-only
+  services** (as for Monguana): `compose.host-network.yaml`, or VNC's SSH
+  tunnel.
+- **The healthcheck sends the canonical host name** (`manage.py health`), or it
+  fails behind a proxy. Verified healthy behind Caddy; terminals over
+  WebSockets work through it.
+- `.env.example` used to set `GANXTERM_DATA_DIR=/data` (broke from-source
+  runs) and named `PYTINCTURE_*` variables the app never reads.
+
 **After any edit to `../wa_pytincture_widgetset/wapyt/assets/*`:**
 
 ```bash

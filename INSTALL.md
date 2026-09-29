@@ -9,6 +9,10 @@ the wapyt widgetset) from the internet while it builds.
 - **Network during the build:** github.com, pypi.org and deb.debian.org.
 - **Time:** the first build takes roughly 3–10 minutes; later ones reuse most of it.
 
+**Windows without Docker?** There is also a native installer, with no
+container engine and no HTTPS: see
+[section 12](#12-windows-without-docker-native-installer).
+
 Every command below is shown for Docker. **For Podman, replace `docker` with
 `podman`** — the compose files, flags and paths are the same, except where a
 section says otherwise. Where Windows PowerShell differs from macOS/Linux
@@ -27,6 +31,7 @@ shells, both are given.
 9. [Reaching IguanaXterm from other machines](#9-reaching-iguanaxterm-from-other-machines)
 10. [Troubleshooting](#10-troubleshooting)
 11. [What was actually tested](#11-what-was-actually-tested)
+12. [Windows without Docker (native installer)](#12-windows-without-docker-native-installer)
 
 ---
 
@@ -152,7 +157,7 @@ Open `.env` in any text editor and set, at least:
 
 | Setting | What it does |
 |---|---|
-| `GANXTERM_ADMIN_PASS` | Password of the first account, `admin`. **Used only on the very first start**, when there are no accounts yet; change it later from the app. |
+| `GANXTERM_ADMIN_PASS` | Password of the first account, `admin`. **Used only on the very first start**, when there are no accounts yet. Left empty, it is `change_me`. Either way, IguanaXterm asks for a new password each time it loads until you change it from the app. |
 | `GANXTERM_ADMIN_USER` | Its name, if not `admin`. |
 | `GANXTERM_PORT` | The port on this computer, default `8765`. Change it if 8765 is taken. |
 
@@ -542,8 +547,82 @@ provider, starting from a clean copy of the repository and an empty volume:
 - Every compose file and combination validates with Docker Compose
   (`docker compose config`).
 
+On **Windows with Docker Desktop**, IguanaXterm was installed and run by hand
+(2026-09-29) and works.
+
 Not tested here: Docker Engine itself (its daemon needed root on the test
-machine), `compose.downloads.yaml` with Docker, Windows, and macOS. The steps
+machine), `compose.downloads.yaml` with Docker, and macOS. The steps
 for those follow Docker's and Podman's documented behaviour. If something
 differs on your system, `manage.py probe` will show where, and an issue on
 GitHub is welcome.
+
+---
+
+## 12. Windows without Docker (native installer)
+
+For a computer without Docker: a normal Windows installer that runs
+IguanaXterm directly, for **you, on this computer only**. It needs no
+administrator rights, no container engine and no certificate.
+
+**Get it:** `IguanaXterm-<version>-setup.exe`, attached to each
+[release](https://github.com/El-Iguana/iguanaxterm_wapyt/releases) (built by
+the `windows` GitHub Actions workflow). Windows 10 or 11, 64-bit.
+
+**SmartScreen:** the installer is not code-signed yet, so Windows says
+*"Windows protected your PC"*. Choose **More info → Run anyway**.
+
+**What it does:**
+
+- Installs to `%LOCALAPPDATA%\Programs\IguanaXterm`, with its own Python. It
+  does not touch any Python you have.
+- Adds **IguanaXterm**, **Reset IguanaXterm password** and **Uninstall
+  IguanaXterm** to the Start menu. It can also add a desktop shortcut and
+  start IguanaXterm when you sign in.
+- Starting **IguanaXterm** runs the server in the background and opens
+  `http://127.0.0.1:8765/iguanaxterm` in your default browser. If 8765 is
+  taken, it uses the next free port. A tray icon offers **Open IguanaXterm**,
+  **Show downloads folder**, **Show log folder** and **Quit IguanaXterm**.
+  Starting it again while it runs just opens the browser.
+- **Plain HTTP is safe here** because it listens on 127.0.0.1 only: nothing
+  outside your computer can reach it. Use `127.0.0.1` exactly, not
+  `localhost`, which answers *400 Invalid host header*.
+
+**First start:** sign in as **`admin`** with password **`change_me`** (a
+message box reminds you). IguanaXterm then asks you to choose your own
+password, and keeps asking each time it loads until you do. Forgot it later?
+Run **Reset IguanaXterm password** from the Start menu.
+
+**Folder downloads** (section 6) that a browser cannot save through a folder
+picker go straight to your own **Downloads\IguanaXterm** folder, since the
+"server" is your computer. Remote names Windows does not allow (`a:b`, `CON`,
+a trailing dot) are saved with a `_`, and two names that would clash get
+` (2)`.
+
+**Your data** (accounts, saved sessions, known host keys, the key that
+encrypts their passwords, logs) is in `%LOCALAPPDATA%\IguanaXterm`.
+Upgrading keeps it: run the new installer over the old one. To back it up,
+quit IguanaXterm from the tray and copy that folder. Keep `secret.key` with
+`iguanaxterm.db`; without it, the saved passwords cannot be decrypted.
+
+**Uninstall** from Start menu → Uninstall IguanaXterm, or Settings → Apps. It
+asks whether to delete your data too; the default keeps it. Your downloaded
+files are never removed.
+
+**If it does not start**, a message box says so. The reason is in
+`%LOCALAPPDATA%\IguanaXterm\logs\server.log` (tray → Show log folder).
+
+**Command line** (PowerShell), for support or scripts:
+
+```powershell
+$x = "$env:LOCALAPPDATA\Programs\IguanaXterm"
+& "$x\python\python.exe" "$x\app\iguanaxterm_launcher.py" --status   # prints the URL if running
+& "$x\python\python.exe" "$x\app\iguanaxterm_launcher.py" --stop
+& "$x\python\python.exe" "$x\app\iguanaxterm_launcher.py" --check    # start, check the login page, stop
+```
+
+**Tested:** every build runs on a GitHub Actions Windows runner, which runs
+the unit tests on Windows, installs it silently, starts it, checks the login
+page, the script MIME types (xterm, noVNC) and the downloads folder, stops it
+and uninstalls it. The tray icon and the first-run message box can only be
+checked by hand on a Windows desktop.
+

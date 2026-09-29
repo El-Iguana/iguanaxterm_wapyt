@@ -57,4 +57,4 @@ pytincture = { git = "https://github.com/pytincture/pytincture.git", tag = "v1.0
 wapyt = { path = "../wa_pytincture_widgetset", editable = false }
 
 [tool.setuptools]
-py-modules = ["service"]
+py-modules = ["service", "pytincture_compat"]

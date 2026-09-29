@@ -438,6 +438,44 @@ class IguanaXterm(MainWindow):
         if label:  # JsNull, not None, when absent
             suffix = " · admin" if self._me.get("is_admin") else ""
             label.textContent = f"{self._me.get('username', '')}{suffix}"
+        if self._me.get("must_change_password"):
+            self._password_nag()
+
+    def _password_nag(self) -> None:
+        """
+        Shown on every load while the password is one this person did not
+        choose: the install default (change_me) or one an administrator set.
+        """
+        modal = ModalWindow(ModalConfig(dispose_on_close=True, title="Change your password",
+                                        width=480, height=250))
+        modal.body.innerHTML = (
+            '<div class="ix-nag">'
+            '<p><span class="mdi mdi-shield-alert-outline"></span> '
+            "You are still using a password you did not choose: the default "
+            "<code>change_me</code>, or one an administrator set for you. Anyone "
+            "who knows it can sign in as you and open your saved sessions.</p>"
+            "<p>IguanaXterm will ask again each time it loads until you change it.</p>"
+            '<div class="ix-nag-actions">'
+            '<button type="button" class="ix-sftp-btn" data-nag="later">Later</button>'
+            '<button type="button" class="ix-sftp-btn ix-nag-primary" data-nag="change">'
+            '<span class="mdi mdi-key"></span><span>Change password</span></button>'
+            f"</div></div><style>{_NAG_CSS}</style>"
+        )
+
+        def _on_click(event) -> None:
+            which = event.target.closest("[data-nag]")
+            if not which:
+                return
+            modal.close()
+            if str(which.getAttribute("data-nag")) == "change":
+                self._password_dialog()
+
+        self._nag_proxy = create_proxy(_on_click)
+        modal.body.addEventListener("click", self._nag_proxy)
+        modal.show()
+        focus = modal.body.querySelector('[data-nag="change"]')
+        if focus:
+            focus.focus()
 
     async def _reload_sessions(self) -> None:
         self._sessions = await SessionService().list_async()
@@ -2661,6 +2699,7 @@ class IguanaXterm(MainWindow):
                         form.set_error(None, result.get("error", "Could not change"))
                     return
                 modal.hide()
+                self._me["must_change_password"] = False
                 self._toast("Password changed.")
             finally:
                 form.set_busy(False)
@@ -2806,6 +2845,16 @@ class IguanaXterm(MainWindow):
         self._toast_timer = js.window.setTimeout(
             create_proxy(lambda: holder.removeAttribute("data-visible")), 4000
         )
+
+
+_NAG_CSS = """
+.ix-nag{display:flex;flex-direction:column;gap:10px;padding:4px 2px;font:13px/1.55 system-ui,sans-serif;color:#cbd5f5;}
+.ix-nag p{margin:0;}
+.ix-nag .mdi-shield-alert-outline{color:#fbbf24;font-size:17px;vertical-align:-2px;}
+.ix-nag code{padding:1px 5px;border-radius:4px;background:rgba(148,163,184,.15);color:#fde68a;}
+.ix-nag-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:6px;}
+.ix-nag-primary{background:#047857;border-color:#10b981;color:#ecfdf5;}
+"""
 
 
 _SAVED_CSS = """

@@ -30,10 +30,20 @@ class UserService:
     # ------------------------------------------------------------------
 
     def me(self) -> dict:
+        must_change = False
+        if self._user_id:
+            with get_db() as conn:
+                row = conn.execute(
+                    "SELECT must_change_pw FROM users WHERE id = ?", (self._user_id,)
+                ).fetchone()
+            must_change = bool(row and row["must_change_pw"])
         return {
             "user_id": self._user_id,
             "username": self._user.get("username", ""),
             "is_admin": bool(self._user.get("is_admin")),
+            # A password this person did not choose (the install default, or
+            # one an administrator set): the UI asks for a new one on load.
+            "must_change_password": must_change,
         }
 
     def change_own_password(self, current_password: str, new_password: str) -> dict:
@@ -56,10 +66,15 @@ class UserService:
                 "ok": False,
                 "errors": {"current_password": "Current password is incorrect"},
             }
+        if new_password == current_password:
+            return {
+                "ok": False,
+                "errors": {"new_password": "Choose a password different from the current one"},
+            }
 
         with get_db() as conn:
             conn.execute(
-                "UPDATE users SET pw_hash = ? WHERE id = ?",
+                "UPDATE users SET pw_hash = ?, must_change_pw = 0 WHERE id = ?",
                 (hash_password(new_password), self._user_id),
             )
         return {"ok": True}
@@ -102,7 +117,8 @@ class UserService:
         try:
             with get_db() as conn:
                 cursor = conn.execute(
-                    "INSERT INTO users (username, pw_hash, is_admin) VALUES (?, ?, ?)",
+                    # They did not choose it: asked to change it when they sign in.
+                    "INSERT INTO users (username, pw_hash, is_admin, must_change_pw) VALUES (?, ?, ?, 1)",
                     (name, hash_password(password), int(bool(is_admin))),
                 )
                 new_id = cursor.lastrowid
@@ -173,8 +189,10 @@ class UserService:
             }
         with get_db() as conn:
             cursor = conn.execute(
-                "UPDATE users SET pw_hash = ? WHERE id = ?",
-                (hash_password(new_password), int(user_id)),
+                # Set by an administrator, so the person is asked to change it.
+                # Resetting your own account here counts as choosing it.
+                "UPDATE users SET pw_hash = ?, must_change_pw = ? WHERE id = ?",
+                (hash_password(new_password), int(int(user_id) != self._user_id), int(user_id)),
             )
         if cursor.rowcount == 0:
             return {"ok": False, "error": "User not found"}

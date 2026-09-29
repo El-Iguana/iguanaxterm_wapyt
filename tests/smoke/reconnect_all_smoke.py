@@ -16,7 +16,7 @@ from playwright.sync_api import sync_playwright
 
 import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-from harness import reset_workspace  # noqa: E402
+from harness import dismiss_password_nag, reset_workspace  # noqa: E402
 
 
 APP = "http://127.0.0.1:8799/iguanaxterm"
@@ -120,6 +120,7 @@ with sync_playwright() as p:
     # ── restore ──────────────────────────────────────────────────────────────
     page.reload(wait_until="domcontentloaded")
     page.wait_for_selector(".ix-reconnect-btn", timeout=180000)
+    dismiss_password_nag(page)  # a reload shows it again
     page.wait_for_timeout(500)
     state = button_state(page)
     check(not state["hidden"] and state["text"] == "Reconnect all (4)",

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import posixpath
+import sys
 import stat as stat_module
 import threading
 import time
@@ -18,7 +19,24 @@ from typing import Optional
 
 from services.auth import current_user_id
 from services.db import DATA_DIR, fetch_session
-from services.paths import is_safe_name
+from services.paths import LocalNames, is_safe_name, windows_safe_name
+
+# The downloads folder is on this machine's disk. On a native Windows install
+# (tools/windows) that is Windows: a remote Linux name such as "a:b", "CON" or
+# "..\\x" would fail there, or -- a backslash being a separator -- walk out of
+# the folder. Each segment is cleaned as the browser-side download does.
+_LOCAL_WINDOWS = sys.platform == "win32"
+_LOCAL_CASE_INSENSITIVE = sys.platform in ("win32", "darwin")
+
+
+def local_segment(name: str) -> str:
+    """One remote name as a single path segment on this machine's disk."""
+    return windows_safe_name(name) if _LOCAL_WINDOWS else name
+
+
+def local_names() -> LocalNames:
+    """Remote relative path -> local one, for one folder copy."""
+    return LocalNames(windows=_LOCAL_WINDOWS, case_insensitive=_LOCAL_CASE_INSENSITIVE)
 
 _CHUNK = 256 * 1024
 
@@ -48,7 +66,7 @@ def user_dir_name(user: dict) -> str:
     name = str((user or {}).get("username") or "")
     if not is_safe_name(name) or name.startswith("."):
         name = f"user-{current_user_id(user)}"
-    return name
+    return local_segment(name)
 
 
 def user_root(user: dict) -> Path:
@@ -84,6 +102,17 @@ def free_name(parent: Path, name: str) -> Path:
         n += 1
         candidate = parent / f"{name} ({n})"
     return candidate
+
+
+def local_path(folder: Path, local_relative: str) -> Path:
+    """
+    A mapped, ``/``-separated relative path under ``folder``, checked to stay
+    inside it (``resolve_inside``) as a second line behind the name cleaning.
+    """
+    try:
+        return resolve_inside(folder, local_relative)
+    except PermissionError as exc:
+        raise ValueError(f"Not saved: {local_relative!r} would leave the folder") from exc
 
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────
@@ -147,6 +176,7 @@ def _run(job: _Job, profile: dict) -> None:
 
         # Walk first, so the progress bar has a real total.
         files: list[tuple[str, str, int]] = []   # remote, relative, size
+        names = local_names()
         pending = [job.remote]
         while pending and not job.cancel.is_set():
             current = pending.pop(0)
@@ -168,7 +198,7 @@ def _run(job: _Job, profile: dict) -> None:
                 relative = posixpath.relpath(child, job.remote)
                 if stat_module.S_ISDIR(attr.st_mode or 0):
                     pending.append(child)
-                    (job.local / relative).mkdir(parents=True, exist_ok=True)
+                    local_path(job.local, names.map_dir(relative)).mkdir(parents=True, exist_ok=True)
                 else:
                     files.append((child, relative, int(attr.st_size or 0)))
                     job.files_total += 1
@@ -179,7 +209,7 @@ def _run(job: _Job, profile: dict) -> None:
             if job.cancel.is_set():
                 break
             job.current = relative
-            target = job.local / relative
+            target = local_path(job.local, names.map(relative))
             partial = target.with_name(target.name + ".part")
             try:
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -233,7 +263,7 @@ def start_job(user: dict, session_id: int, remote: str) -> _Job:
     if not is_safe_name(name):
         raise ValueError("That folder name cannot be saved")
     root = user_root(user)
-    local = free_name(root, name)
+    local = free_name(root, local_segment(name))
     local.mkdir(parents=True)
     job = _Job(user_id, int(session_id), remote.rstrip("/") or "/", local, root,
                shown_root=f"{display_root()}/{user_dir_name(user)}")

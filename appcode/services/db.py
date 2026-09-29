@@ -23,6 +23,9 @@ DATA_DIR = Path(os.environ.get("GANXTERM_DATA_DIR", Path(__file__).resolve().par
 DB_PATH = DATA_DIR / "iguanaxterm.db"
 KEY_PATH = DATA_DIR / "secret.key"
 SESSION_KEY_PATH = DATA_DIR / "session.key"
+# Windows opens os.open() files in text mode unless told otherwise; the keys
+# are bytes. (The 0o600 mode is ignored there: %LOCALAPPDATA% is per-user.)
+_O_BINARY = getattr(os, "O_BINARY", 0)
 
 # Marks a value as encrypted so a database carried over from the original app,
 # where credentials were plaintext, keeps working until init_db() rewrites it.
@@ -62,7 +65,7 @@ def _load_fernet() -> Fernet:
         # Write with the restrictive mode already in place: creating the file
         # world-readable and chmod-ing afterwards leaves a window where the key
         # is exposed.
-        fd = os.open(KEY_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        fd = os.open(KEY_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_BINARY, 0o600)
         try:
             os.write(fd, key)
         finally:
@@ -85,11 +88,11 @@ def session_secret() -> str:
         return from_env
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     if SESSION_KEY_PATH.exists():
-        existing = SESSION_KEY_PATH.read_text().strip()
+        existing = SESSION_KEY_PATH.read_text(encoding="ascii").strip()
         if existing:
             return existing
     secret = secrets.token_urlsafe(48)
-    fd = os.open(SESSION_KEY_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(SESSION_KEY_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _O_BINARY, 0o600)
     try:
         os.write(fd, secret.encode())
     finally:
@@ -147,6 +150,10 @@ CREATE TABLE IF NOT EXISTS users (
     username   TEXT    NOT NULL UNIQUE COLLATE NOCASE,
     pw_hash    TEXT    NOT NULL,
     is_admin   INTEGER NOT NULL DEFAULT 0,
+    -- 1 while the password is one this person did not choose: the install
+    -- default, or one an administrator set. The app asks them to change it
+    -- on every load until they do.
+    must_change_pw INTEGER NOT NULL DEFAULT 0,
     created_at TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -180,6 +187,13 @@ CREATE TABLE IF NOT EXISTS layouts (
 """
 
 
+# The first account's password when GANXTERM_ADMIN_PASS is not set. Easy on
+# purpose: the account is flagged, and the app asks for a new password on
+# every load until it is changed. "changeme" was the default before.
+DEFAULT_ADMIN_PASSWORD = "change_me"
+_KNOWN_DEFAULTS = (DEFAULT_ADMIN_PASSWORD, "changeme")
+
+
 def init_db() -> None:
     """Create the schema, migrate an older database, and seed the first admin."""
     with get_db() as conn:
@@ -197,21 +211,36 @@ def init_db() -> None:
             if column not in existing:
                 conn.execute(f"ALTER TABLE sessions ADD COLUMN {column} {definition}")
 
+        users = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
+        if "must_change_pw" not in users:
+            conn.execute("ALTER TABLE users ADD COLUMN must_change_pw INTEGER NOT NULL DEFAULT 0")
+            # Accounts created before the flag existed: flag any still on a
+            # known default password.
+            for row in conn.execute("SELECT id, pw_hash FROM users").fetchall():
+                if any(verify_password(known, row["pw_hash"]) for known in _KNOWN_DEFAULTS):
+                    conn.execute("UPDATE users SET must_change_pw = 1 WHERE id = ?", (row["id"],))
+
         if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
             admin_user = os.environ.get("GANXTERM_ADMIN_USER", "admin")
-            admin_pass = os.environ.get("GANXTERM_ADMIN_PASS", "changeme")
+            from_env = os.environ.get("GANXTERM_ADMIN_PASS", "")
+            admin_pass = from_env or DEFAULT_ADMIN_PASSWORD
+            # Flagged either way: nobody chose this password in the app.
             conn.execute(
-                "INSERT INTO users (username, pw_hash, is_admin) VALUES (?, ?, 1)",
+                "INSERT INTO users (username, pw_hash, is_admin, must_change_pw) VALUES (?, ?, 1, 1)",
                 (admin_user, hash_password(admin_pass)),
             )
+            source = (
+                "the password from GANXTERM_ADMIN_PASS" if from_env
+                else f"the default password {DEFAULT_ADMIN_PASSWORD!r}"
+            )
             banner = "=" * 58
-            # The password is deliberately not echoed: the original printed it,
-            # which puts it in the container log and anywhere that ships.
+            # A password from the environment is deliberately not echoed: the
+            # original printed it, which puts it in the container log.
             print(
                 f"\n{banner}\n"
                 f"  Created the initial admin account: {admin_user!r}\n"
-                f"  Using GANXTERM_ADMIN_PASS from the environment.\n"
-                f"  Change it from the UI before exposing this service.\n"
+                f"  with {source}.\n"
+                f"  IguanaXterm asks for a new one on every load until it is changed.\n"
                 f"{banner}\n",
                 flush=True,
             )

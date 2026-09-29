@@ -9,6 +9,29 @@ cause.
 from __future__ import annotations
 
 
+def dismiss_password_nag(page, timeout_ms: int = 60000) -> bool:
+    """
+    Close the "Change your password" reminder with Later, if it shows.
+
+    The smoke admin is seeded from GANXTERM_ADMIN_PASS, a password nobody
+    chose in the app, so the reminder opens on every load. It opens in the
+    same step that fills the toolbar's user label, so wait for the label
+    rather than for a fixed time: the identity call can be slow on a cold load.
+    """
+    page.wait_for_function(
+        "() => (document.getElementById('ix-user')?.textContent || '').trim() !== ''",
+        timeout=timeout_ms,
+    )
+    later = page.locator('[data-nag="later"]')
+    try:
+        later.wait_for(state="visible", timeout=1500)
+    except Exception:  # noqa: BLE001 - no reminder: nothing to do
+        return False
+    later.click()
+    later.wait_for(state="detached", timeout=5000)
+    return True
+
+
 def reset_workspace(page, timeout_ms: int = 30000) -> int:
     """
     Close every open pane and return how many there were.
@@ -16,6 +39,7 @@ def reset_workspace(page, timeout_ms: int = 30000) -> int:
     Leaves the workspace tabbed and empty, and waits for the debounced layout
     save so the next reload starts clean too.
     """
+    dismiss_password_nag(page)
     tabbed = page.locator('.ix-mode-btn[data-mode="tabbed"]')
     if tabbed.count():
         tabbed.click()
@@ -41,6 +65,7 @@ def reset_workspace(page, timeout_ms: int = 30000) -> int:
         # layout is empty now, so a reload starts the counter clean.
         page.reload(wait_until="domcontentloaded")
         page.wait_for_selector(".ix-toolbar", timeout=180000)
+        dismiss_password_nag(page)  # a reload shows it again
         page.wait_for_timeout(800)
     return closed
 

@@ -1,0 +1,4 @@
+# The launcher's tray icon (tools/windows/launcher.py), on top of uv.lock.
+# Pinned: the Windows build installs them with --only-binary.
+pystray==0.19.5
+pillow==12.3.0

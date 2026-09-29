@@ -119,7 +119,9 @@ def reset_password(username: str, create: bool, from_stdin: bool) -> int:
     init_db()
     with get_db() as conn:
         cursor = conn.execute(
-            "UPDATE users SET pw_hash = ? WHERE username = ?", (hash_password(password), username)
+            # Whoever runs this chooses the password: no reminder to change it.
+            "UPDATE users SET pw_hash = ?, must_change_pw = 0 WHERE username = ?",
+            (hash_password(password), username),
         )
         if cursor.rowcount:
             print(f"Password changed for {username}.")

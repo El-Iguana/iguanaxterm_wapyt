@@ -623,6 +623,7 @@ $x = "$env:LOCALAPPDATA\Programs\IguanaXterm"
 **Tested:** every build runs on a GitHub Actions Windows runner, which runs
 the unit tests on Windows, installs it silently, starts it, checks the login
 page, the script MIME types (xterm, noVNC) and the downloads folder, stops it
-and uninstalls it. The tray icon and the first-run message box can only be
-checked by hand on a Windows desktop.
+and uninstalls it. The v2.0.0 installer was also installed and used by hand
+on **Windows 11** (2026-09-29), including the tray icon, the first-run
+message box and the Start-menu shortcuts.
 

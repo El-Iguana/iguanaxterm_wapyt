@@ -17,7 +17,7 @@ from playwright.sync_api import sync_playwright
 
 import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-from harness import reset_workspace  # noqa: E402
+from harness import dismiss_password_nag, reset_workspace  # noqa: E402
 
 
 APP = "http://127.0.0.1:8799/iguanaxterm"
@@ -145,6 +145,7 @@ with sync_playwright() as p:
     page.wait_for_timeout(1200)  # let the debounced layout save land
     page.reload(wait_until="domcontentloaded")
     page.wait_for_selector(".ix-reconnect-btn", timeout=180000)
+    dismiss_password_nag(page)  # a reload shows it again
     check(page.evaluate("window.__terminalSockets") == 0, "restore dials nothing")
     pane = page.eval_on_selector(".ix-pane", "e => e.dataset.pane")
     page.click(f'.ix-reconnect-btn[data-reconnect="{pane}"]')

@@ -1,0 +1,156 @@
+# Native Windows install: unit tests on Windows, then build setup.exe, install
+# it silently, check the installed app starts and serves its login page, and
+# uninstall. No SSH/FTP/VNC targets here: the Playwright smokes in tests/smoke
+# are run by hand against targets the tester supplies (tests/smoke/README.md).
+name: windows
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "tools/windows/**"
+      - ".github/workflows/windows.yml"
+      - "service.py"
+      - "manage.py"
+      - "appcode/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "Containerfile"
+  workflow_dispatch:
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    permissions:
+      contents: write  # attaching setup.exe to a tag's release
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: iguanaxterm_wapyt
+
+      # uv.lock resolves wapyt from ../wa_pytincture_widgetset, at the commit
+      # the Containerfile pins.
+      - name: Read the pinned wapyt commit
+        id: wapyt
+        run: |
+          $ref = (Select-String -Path iguanaxterm_wapyt/Containerfile -Pattern '^ARG WAPYT_REF=(\S+)').Matches[0].Groups[1].Value
+          "ref=$ref" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/checkout@v4
+        with:
+          repository: WAwesome-AI/wa_pytincture_widgetset
+          ref: ${{ steps.wapyt.outputs.ref }}
+          path: wa_pytincture_widgetset
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+
+      - name: Unit tests
+        working-directory: iguanaxterm_wapyt
+        run: |
+          uv sync --frozen --group dev
+          uv run --frozen pytest -q
+
+      - name: Inno Setup
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+
+      - name: Build the installer
+        working-directory: iguanaxterm_wapyt
+        run: uv run --frozen python tools/windows/build.py --installer
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iguanaxterm-windows-setup
+          path: iguanaxterm_wapyt/dist/IguanaXterm-*-setup.exe
+          if-no-files-found: error
+
+      - name: Install silently
+        working-directory: iguanaxterm_wapyt
+        run: |
+          $setup = Get-ChildItem dist/IguanaXterm-*-setup.exe | Select-Object -First 1
+          $p = Start-Process $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER','/LOG=install.log' -Wait -PassThru
+          Get-Content install.log -Tail 20
+          if ($p.ExitCode -ne 0) { throw "setup exited $($p.ExitCode)" }
+          $app = "$env:LOCALAPPDATA\Programs\IguanaXterm"
+          foreach ($f in 'python\python.exe','python\pythonw.exe','app\service.py','app\iguanaxterm_launcher.py','unins000.exe') {
+            if (-not (Test-Path "$app\$f")) { throw "missing after install: $f" }
+          }
+          if (-not (Get-ChildItem "$app\app\appcode\wapyt-99.99.99-*.whl")) { throw "browser wheel missing" }
+
+      - name: The installed app starts and serves its login page
+        run: |
+          $app = "$env:LOCALAPPDATA\Programs\IguanaXterm"
+          & "$app\python\python.exe" "$app\app\iguanaxterm_launcher.py" --check
+          $code = $LASTEXITCODE
+          Get-Content "$env:LOCALAPPDATA\IguanaXterm\logs\server.log" -Tail 40
+          if ($code -ne 0) { throw "--check failed ($code)" }
+
+      - name: Start in the background, then stop (the uninstaller's path)
+        run: |
+          $app = "$env:LOCALAPPDATA\Programs\IguanaXterm"
+          $env:GANXTERM_LAUNCHER_QUIET = "1"
+          Start-Process "$app\python\pythonw.exe" -ArgumentList "`"$app\app\iguanaxterm_launcher.py`"",'--no-browser','--no-tray'
+          $up = $false
+          foreach ($i in 1..120) {
+            & "$app\python\python.exe" "$app\app\iguanaxterm_launcher.py" --status
+            if ($LASTEXITCODE -eq 0) { $up = $true; break }
+            Start-Sleep -Milliseconds 500
+          }
+          if (-not $up) {
+            Get-Content "$env:LOCALAPPDATA\IguanaXterm\logs\server.log" -Tail 40
+            throw "did not come up"
+          }
+          # Scripts must not come back as text/plain (Windows registry MIME):
+          # xterm, and noVNC's ES modules, which a browser refuses outright.
+          $status = & "$app\python\python.exe" "$app\app\iguanaxterm_launcher.py" --status
+          $port = ([uri]$status).Port
+          foreach ($asset in 'xterm/xterm.js', 'novnc/core/rfb.js') {
+            $r = Invoke-WebRequest "http://127.0.0.1:$port/$asset" -UseBasicParsing
+            "$asset : $($r.StatusCode) $($r.Headers['Content-Type'])"
+            if ($r.Headers['Content-Type'] -notlike 'text/javascript*') { throw "wrong MIME type for $asset" }
+          }
+          # Folder downloads go to the Downloads known folder, not the data dir.
+          $expected = Join-Path (New-Object -ComObject Shell.Application).NameSpace('shell:Downloads').Self.Path 'IguanaXterm'
+          $got = & "$app\python\python.exe" -c "import sys; sys.path.insert(0, r'$app\app'); import iguanaxterm_launcher as l; print(l.downloads_dir())"
+          "downloads folder: $got (expected $expected)"
+          if ($got -ne $expected) { throw "downloads folder is $got" }
+          & "$app\python\python.exe" "$app\app\iguanaxterm_launcher.py" --stop
+          Start-Sleep -Seconds 2
+          & "$app\python\python.exe" "$app\app\iguanaxterm_launcher.py" --status
+          if ($LASTEXITCODE -eq 0) { throw "still running after --stop" }
+          # Actions ends a pwsh step with the last program's exit code, and that
+          # --status just reported "not running" (1), which is the point.
+          exit 0
+
+      - name: Uninstall silently
+        run: |
+          $app = "$env:LOCALAPPDATA\Programs\IguanaXterm"
+          $p = Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "uninstall exited $($p.ExitCode)" }
+          Start-Sleep -Seconds 3
+          if (Test-Path "$app\python") { throw "python\ left behind" }
+          # A silent uninstall keeps the data.
+          if (-not (Test-Path "$env:LOCALAPPDATA\IguanaXterm\iguanaxterm.db")) { throw "data was removed" }
+
+      # Only after everything above passed: a v* tag gets a release with the
+      # installer attached (created if missing, the file replaced if present).
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: iguanaxterm_wapyt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $setup = (Get-ChildItem dist/IguanaXterm-*-setup.exe | Select-Object -First 1).FullName
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -ne 0) { gh release create $tag --title "IguanaXterm $tag" --generate-notes }
+          gh release upload $tag $setup --clobber

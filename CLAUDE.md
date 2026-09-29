@@ -28,6 +28,7 @@ local checkout is behind `origin/main`, so read the remote if you need it.
 
 ```
 service.py              # ASGI entrypoint: config, hooks, routers, static mount
+pytincture_compat.py    # pytincture workarounds per platform (Windows: see below)
 appcode/                # pytincture modules_path
   iguanaxterm.py        #   browser UI (Pyodide). APP_ENTRYPOINT lives here.
   services/
@@ -45,6 +46,7 @@ appcode/                # pytincture modules_path
   vendor/xterm/         #   vendored xterm.js — served at /xterm
   wapyt-99.99.99-*.whl  #   dev wheel the BROWSER installs (not the venv copy)
 tests/                  # CPython unit tests for the pure modules
+tools/windows/          # native Windows install: launcher, build.py, Inno Setup
 ```
 
 ## Running
@@ -462,6 +464,56 @@ panel measures 0×0 and fitting against that produces a 1×1 terminal that never
 recovers. `Terminal.fit()` skips while hidden and a `ResizeObserver` re-fits on
 the way back; `_on_tab_change` also calls `fit()` explicitly.
 
+### Native Windows install (2026-09-29)
+
+The same design as Monguana's (ROADMAP phase 38 in `../monguana_wapyt`; its
+CLAUDE.md records every trap in full). `tools/windows/build.py` assembles
+`build/windows/bundle` — official embeddable CPython 3.13.15 (pinned by
+sha256), Windows wheels from `uv.lock` via `uv pip --python-platform`, the app
+and the browser wapyt wheel — and with `--installer` runs Inno Setup
+(`iguanaxterm.iss`) into `dist/`. It builds on Linux; only ISCC needs Windows,
+so the `windows` workflow builds, silently installs, runs `--check`,
+start/stop (checking xterm and noVNC are served as `text/javascript`, and the
+downloads folder) and uninstall on `windows-latest`. `launcher.py` (installed
+as `app\iguanaxterm_launcher.py`) runs the server on 127.0.0.1, port 8765 or
+the next free one; data in `%LOCALAPPDATA%\IguanaXterm`.
+
+- **`pytincture_compat.py`** works around pytincture being unable to read any
+  contained file on Windows (it opens a *directory* with `os.open()`); the
+  upstream fix is parked on pytincture branch `fix/windows-contained-file-open`.
+  Drop the patch once a pytincture release has it.
+- **MIME types are pinned** in `service.register_mime_types()`: Windows'
+  registry often maps `.js` to `text/plain`, and noVNC's ES modules are
+  refused outright with the wrong type.
+- **Folder downloads saved "on the server" go to the real Downloads folder**
+  (`GANXTERM_DOWNLOAD_DIR` = the Downloads *known folder* + `IguanaXterm`,
+  asked of Windows because it may be on OneDrive). The server-side copy maps
+  every remote name through `download_jobs.local_names()` — `LocalNames` with
+  `windows=`/`case_insensitive=` by platform — and `local_path()` re-checks
+  containment. Before this, a remote `..\x` or `c:x` would have left the
+  folder on a Windows disk: backslash is a separator there, and `is_safe_name`
+  only rejects `/`. `tests/test_windows_local_names.py` forces the Windows
+  mapping on Linux.
+- Key files are written with `O_BINARY`; tests read sources as UTF-8.
+
+### Default password and the reminder (2026-09-29)
+
+As in Monguana: the first admin's password is `GANXTERM_ADMIN_PASS`, or
+`change_me` (`db.DEFAULT_ADMIN_PASSWORD`) when unset. **`users.must_change_pw`**
+marks a password the person did not choose — the seeded admin, an account an
+admin creates, an admin's reset of someone else's — and while it is set the
+page shows `_password_nag` **on every load**. Changing your own password (to a
+different one), resetting your own from the Users panel, or `manage.py
+reset-password` clears it. `init_db` adds the column to older databases and
+flags accounts still on `change_me`/`changeme`. `tests/test_default_password.py`.
+
+**The smoke admin is always flagged** (it is seeded from
+`GANXTERM_ADMIN_PASS`), so `harness.dismiss_password_nag()` clicks Later: in
+`reset_workspace`, after its reload, and after the mid-test reloads in the FTP
+and reconnect-all smokes. It waits for the toolbar's user label, which is
+filled in the same step that opens the reminder — a fixed wait was too short
+on a cold load.
+
 ## Connection types (2026-09-23)
 
 `SESSION_TYPES` in `services/paths.py` is the one table of what a type can do —
@@ -510,6 +562,14 @@ only branch. Things that shaped it:
 - **Tested live** in `tests/test_ftp.py` against in-process pyftpdlib, plain
   and TLS-required (dev deps `pyftpdlib`, `pyopenssl`), and in the browser by
   `tests/smoke/ftp_smoke.py`.
+- **A download closed before the end gets "426 Transfer aborted"** — the
+  server is still sending. That is the normal reply to an HTTP range that
+  ends before the file does, so `_TransferHandle` tracks EOF and
+  `_finish_transfer(cut_short=True)` accepts a 426 and keeps the control
+  connection (its reply was read in full). It used to raise. Found by the
+  first Windows CI run: a 1 MiB test file fits in Linux's loopback buffers
+  before the close, not in Windows'. `test_ftp_range_cut_short_of_a_file_bigger_than_the_socket_buffers`
+  reproduces it on Linux with 64 MiB.
 
 ## GridStack tiling (built)
 

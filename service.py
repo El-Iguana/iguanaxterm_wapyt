@@ -50,6 +50,31 @@ def load_dotenv_file() -> None:
 
 load_dotenv_file()
 
+
+def register_mime_types() -> None:
+    """
+    Pin the types the browser is strict about. On Windows, ``mimetypes``
+    reads the registry, where other software often maps ``.js`` to
+    ``text/plain``; StaticFiles (xterm, noVNC's ES modules, GridStack) and
+    pytincture's assets would then be served with a type the browser refuses.
+    """
+    import mimetypes
+
+    for suffix, kind in (
+        (".js", "text/javascript"), (".mjs", "text/javascript"), (".css", "text/css"),
+        (".json", "application/json"), (".wasm", "application/wasm"),
+        (".webp", "image/webp"), (".png", "image/png"), (".svg", "image/svg+xml"),
+        (".zip", "application/zip"),
+    ):
+        mimetypes.add_type(kind, suffix)
+
+
+register_mime_types()
+
+import pytincture_compat  # noqa: E402
+
+pytincture_compat.apply()
+
 from pytincture import PytinctureConfig, create_app  # noqa: E402
 from pytincture.backend.middleware import RequestBodyLimitMiddleware  # noqa: E402
 

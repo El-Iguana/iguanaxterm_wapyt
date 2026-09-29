@@ -128,3 +128,20 @@ def test_ftp_connection_survives_a_range_cut_short(ftp_client):
     assert handle.read(10) == (root / "blob.bin").read_bytes()[100:110]
     handle.close()
     assert [a.filename for a in client.listdir_attr("/")] == ["blob.bin"]
+
+
+def test_ftp_range_cut_short_of_a_file_bigger_than_the_socket_buffers(ftp_client):
+    """
+    The server is still sending when the reader stops, so it answers
+    "426 Transfer aborted" -- the normal reply to a download cut short, not a
+    failure. The 1 MiB file above only passes on Linux because loopback buffers
+    hold it all before the close; Windows' smaller buffers showed the 426.
+    """
+    from services.transfer import open_at
+
+    client, root = ftp_client
+    (root / "big.bin").write_bytes(bytes(range(256)) * (64 * 4096))   # 64 MiB
+    handle = open_at(client, "/big.bin", 5)
+    assert handle.read(10) == bytes(range(5, 15))
+    handle.close()
+    assert sorted(a.filename for a in client.listdir_attr("/")) == ["big.bin", "blob.bin"]

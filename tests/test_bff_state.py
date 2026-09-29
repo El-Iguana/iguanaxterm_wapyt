@@ -62,7 +62,7 @@ def test_no_bff_module_keeps_mutable_state_at_module_level():
 
     suspicious = []
     for path in (APPCODE / "services").glob("*.py"):
-        tree = ast.parse(path.read_text())
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         exports_bff = any(
             isinstance(node, ast.ClassDef)
             and any(getattr(d, "id", None) == "backend_for_frontend" for d in node.decorator_list)

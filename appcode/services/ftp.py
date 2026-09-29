@@ -509,9 +509,17 @@ class FTPFiles:
             raise
         return _TransferHandle(self, data)
 
-    def _finish_transfer(self, data: socket.socket, failed: bool) -> None:
+    def _finish_transfer(self, data: socket.socket, failed: bool, cut_short: bool = False) -> None:
+        """
+        ``cut_short``: a download closed before the server finished sending
+        (an HTTP range that ends before the file does). The server is still
+        writing, so it answers "426 Transfer aborted" -- the normal reply to
+        that, not a failure. Seen first on Windows, whose socket buffers are
+        too small to hold a 1 MiB file before the close; a larger file does
+        the same on Linux.
+        """
         try:
-            if isinstance(data, ssl.SSLSocket) and not failed:
+            if isinstance(data, ssl.SSLSocket) and not failed and not cut_short:
                 # Send close_notify, as ftplib does after STOR/RETR; without it
                 # some servers log the upload as truncated.
                 try:
@@ -525,12 +533,16 @@ class FTPFiles:
             if self._ftp is not None:
                 try:
                     self._ftp.voidresp()
-                except ftplib.all_errors:
+                except ftplib.all_errors as exc:
+                    if cut_short and str(exc).startswith("426"):
+                        # The expected reply, read in full: the control
+                        # connection is in a known state and stays usable.
+                        return
                     # The server's closing reply never came or was an error.
                     # The control connection's state is unknown now, so start
                     # the next command on a fresh one.
                     self._drop()
-                    if not failed:
+                    if not failed and not cut_short:
                         raise
         finally:
             self._busy.release()
@@ -544,15 +556,22 @@ class _TransferHandle:
         self._data = data
         self._closed = False
         self._failed = False
+        self._read_from = False   # a download, as opposed to an upload
+        self._at_eof = False
 
     def read(self, size: int = -1) -> bytes:
+        self._read_from = True
         try:
             if size is None or size < 0:
                 chunks = []
                 while chunk := self._data.recv(256 * 1024):
                     chunks.append(chunk)
+                self._at_eof = True
                 return b"".join(chunks)
-            return self._data.recv(size)
+            chunk = self._data.recv(size)
+            if not chunk and size:
+                self._at_eof = True
+            return chunk
         except OSError:
             self._failed = True
             raise
@@ -575,7 +594,8 @@ class _TransferHandle:
         if self._closed:
             return
         self._closed = True
-        self._owner._finish_transfer(self._data, self._failed)
+        cut_short = self._read_from and not self._at_eof and not self._failed
+        self._owner._finish_transfer(self._data, self._failed, cut_short)
 
     def __del__(self) -> None:
         # A download whose response body was never iterated never reaches the

@@ -67,7 +67,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY --from=wapyt-wheels /wheels/server/ /tmp/wapyt/
 RUN pip install --no-cache-dir /tmp/wapyt/wapyt-*.whl && rm -rf /tmp/wapyt
 
-COPY service.py manage.py ./
+COPY service.py pytincture_compat.py manage.py ./
 COPY appcode/ appcode/
 COPY --from=wapyt-wheels /wheels/browser/wapyt-99.99.99-py3-none-any.whl appcode/
 

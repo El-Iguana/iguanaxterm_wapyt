@@ -148,6 +148,10 @@ class LocalNames:
             self._dirs[remote_dir] = f"{local_parent}/{local}" if local_parent else local
         return self._dirs[remote_dir]
 
+    def map_dir(self, relative: str) -> str:
+        """The local path for one remote directory, ``/``-separated."""
+        return self._dir("/".join(part for part in relative.split("/") if part))
+
     def map(self, relative: str) -> str:
         """The local path for one remote file, ``/``-separated."""
         relative = "/".join(part for part in relative.split("/") if part)

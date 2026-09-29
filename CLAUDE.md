@@ -562,6 +562,14 @@ only branch. Things that shaped it:
 - **Tested live** in `tests/test_ftp.py` against in-process pyftpdlib, plain
   and TLS-required (dev deps `pyftpdlib`, `pyopenssl`), and in the browser by
   `tests/smoke/ftp_smoke.py`.
+- **A download closed before the end gets "426 Transfer aborted"** — the
+  server is still sending. That is the normal reply to an HTTP range that
+  ends before the file does, so `_TransferHandle` tracks EOF and
+  `_finish_transfer(cut_short=True)` accepts a 426 and keeps the control
+  connection (its reply was read in full). It used to raise. Found by the
+  first Windows CI run: a 1 MiB test file fits in Linux's loopback buffers
+  before the close, not in Windows'. `test_ftp_range_cut_short_of_a_file_bigger_than_the_socket_buffers`
+  reproduces it on Linux with 64 MiB.
 
 ## GridStack tiling (built)
 

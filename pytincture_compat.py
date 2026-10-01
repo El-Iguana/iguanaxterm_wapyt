@@ -65,12 +65,13 @@ def turn_off_service_worker(app_module) -> None:
     def open_page(file, *args, **kwargs):
         # The page handler reads the template with a bare open(); this module
         # global shadows the builtin for app.py alone.
-        handle = open(file, *args, **kwargs)
         if isinstance(file, str) and os.path.normpath(file) == os.path.normpath(index_path) \
                 and "b" not in (args[0] if args else kwargs.get("mode", "r")):
-            with handle:
+            # UTF-8 explicitly: the template is, and Windows' default (cp1252)
+            # fails on it unless Python runs in UTF-8 mode.
+            with open(file, encoding="utf-8") as handle:
                 return io.StringIO(handle.read().replace(SERVICE_WORKER_ON, SERVICE_WORKER_OFF))
-        return handle
+        return open(file, *args, **kwargs)
 
     app_module.open = open_page
     app_module._compat_service_worker_off = True

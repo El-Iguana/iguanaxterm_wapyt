@@ -168,6 +168,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     username    TEXT    NOT NULL DEFAULT '',
     password    TEXT    NOT NULL DEFAULT '',
     private_key TEXT    NOT NULL DEFAULT '',
+    passphrase  TEXT    NOT NULL DEFAULT '',  -- the private key's, encrypted like it
     description TEXT    NOT NULL DEFAULT '',
     host_key    TEXT    NOT NULL DEFAULT '',
     via_session_id INTEGER NOT NULL DEFAULT 0,
@@ -207,6 +208,9 @@ def init_db() -> None:
             ("host_key", "TEXT NOT NULL DEFAULT ''"),
             # A VNC profile's SSH session to tunnel through; 0 means direct.
             ("via_session_id", "INTEGER NOT NULL DEFAULT 0"),
+            # The private key's passphrase, encrypted (2.1.1). ssh.py always
+            # asked for one; nothing stored it, so encrypted keys never worked.
+            ("passphrase", "TEXT NOT NULL DEFAULT ''"),
         ):
             if column not in existing:
                 conn.execute(f"ALTER TABLE sessions ADD COLUMN {column} {definition}")
@@ -292,4 +296,5 @@ def fetch_session(session_id: int, user_id: int) -> Optional[dict]:
     session = dict(row)
     session["password"] = decrypt(session.get("password") or "")
     session["private_key"] = decrypt(session.get("private_key") or "")
+    session["passphrase"] = decrypt(session.get("passphrase") or "")
     return session

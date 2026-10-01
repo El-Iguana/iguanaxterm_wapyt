@@ -6,7 +6,8 @@ read of the ``sessions`` table anywhere in the app.
 
 Credentials never travel back to the browser. The original shipped the
 decrypted password and private key to the client purely to prefill the edit
-form; this returns ``has_password`` / ``has_private_key`` flags instead, and
+form; this returns ``has_password`` / ``has_private_key`` /
+``has_passphrase`` flags instead, and
 :meth:`save` only overwrites a stored secret when a replacement is supplied.
 That also gives "leave unchanged" and "clear it" distinct representations,
 which the original could not express.
@@ -50,6 +51,7 @@ class SessionService:
                 f"SELECT {_PUBLIC_COLUMNS}, "
                 "  (password <> '') AS has_password, "
                 "  (private_key <> '') AS has_private_key, "
+                "  (passphrase <> '') AS has_passphrase, "
                 "  (host_key <> '') AS has_host_key "
                 "FROM sessions WHERE user_id = ? "
                 "ORDER BY folder COLLATE NOCASE, name COLLATE NOCASE",
@@ -60,6 +62,7 @@ class SessionService:
                 **dict(row),
                 "has_password": bool(row["has_password"]),
                 "has_private_key": bool(row["has_private_key"]),
+                "has_passphrase": bool(row["has_passphrase"]),
                 "has_host_key": bool(row["has_host_key"]),
             }
             for row in rows
@@ -73,7 +76,8 @@ class SessionService:
             row = conn.execute(
                 f"SELECT {_PUBLIC_COLUMNS}, "
                 "  (password <> '') AS has_password, "
-                "  (private_key <> '') AS has_private_key "
+                "  (private_key <> '') AS has_private_key, "
+                "  (passphrase <> '') AS has_passphrase "
                 "FROM sessions WHERE id = ? AND user_id = ?",
                 (int(session_id), self._user_id),
             ).fetchone()
@@ -83,6 +87,7 @@ class SessionService:
             **dict(row),
             "has_password": bool(row["has_password"]),
             "has_private_key": bool(row["has_private_key"]),
+            "has_passphrase": bool(row["has_passphrase"]),
         }
 
     def folders(self) -> list:
@@ -114,12 +119,15 @@ class SessionService:
         password: str = _SENTINEL_UNCHANGED,
         private_key: str = _SENTINEL_UNCHANGED,
         via_session_id: Optional[int] = 0,
+        passphrase: str = _SENTINEL_UNCHANGED,
     ) -> dict:
         """
         Create or update a profile.
 
-        ``password`` and ``private_key`` are three-state: omitted leaves the
-        stored value alone, ``""`` clears it, anything else replaces it.
+        ``password``, ``private_key`` and ``passphrase`` are three-state:
+        omitted leaves the stored value alone, ``""`` clears it, anything else
+        replaces it. A key that is replaced or cleared takes its passphrase
+        with it, unless a new one comes in the same call.
         """
         if not self._user_id:
             return {"ok": False, "error": "Not authenticated"}
@@ -127,6 +135,9 @@ class SessionService:
         errors = self._validate(name, host, port, session_type)
         if errors:
             return {"ok": False, "errors": errors}
+
+        if private_key != _SENTINEL_UNCHANGED and passphrase == _SENTINEL_UNCHANGED:
+            passphrase = ""  # the stored passphrase belonged to the old key
 
         name = name.strip()
         host = host.strip()
@@ -169,6 +180,9 @@ class SessionService:
                 if private_key != _SENTINEL_UNCHANGED:
                     assignments.append("private_key = ?")
                     values.append(encrypt(private_key))
+                if passphrase != _SENTINEL_UNCHANGED:
+                    assignments.append("passphrase = ?")
+                    values.append(encrypt(passphrase))
                 # Host or port changed means the pinned key belongs to a
                 # different endpoint; drop it so the next connect re-pins.
                 assignments.append(
@@ -194,13 +208,14 @@ class SessionService:
                 cursor = conn.execute(
                     "INSERT INTO sessions "
                     "(user_id, name, host, port, username, type, folder, description, "
-                    " via_session_id, password, private_key) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " via_session_id, password, private_key, passphrase) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         self._user_id, name, host, port, username, session_type,
                         folder, description, via,
                         encrypt("" if password == _SENTINEL_UNCHANGED else password),
                         encrypt("" if private_key == _SENTINEL_UNCHANGED else private_key),
+                        encrypt("" if passphrase == _SENTINEL_UNCHANGED else passphrase),
                     ),
                 )
                 new_id = cursor.lastrowid

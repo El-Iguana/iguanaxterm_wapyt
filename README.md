@@ -74,8 +74,9 @@ connect or fail, so it never makes the burst that restoring avoids.
   retried up to 3 times before you ever see an error
 - **Host-key pinning** — trust on first use, and a refusal (not a silent accept)
   when a host key changes
-- **Key auth** — RSA, Ed25519 and ECDSA, with passphrase support (DSA is gone;
-  Paramiko 5 dropped it)
+- **Key auth** — RSA, Ed25519 and ECDSA, including encrypted keys: the
+  passphrase is stored encrypted like the key (DSA is gone; Paramiko 5
+  dropped it)
 
 ### Remote desktops
 

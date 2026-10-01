@@ -74,8 +74,9 @@ connect or fail, so it never makes the burst that restoring avoids.
   retried up to 3 times before you ever see an error
 - **Host-key pinning** — trust on first use, and a refusal (not a silent accept)
   when a host key changes
-- **Key auth** — RSA, Ed25519 and ECDSA, with passphrase support (DSA is gone;
-  Paramiko 5 dropped it)
+- **Key auth** — RSA, Ed25519 and ECDSA, including encrypted keys: the
+  passphrase is stored encrypted like the key (DSA is gone; Paramiko 5
+  dropped it)
 
 ### Remote desktops
 
@@ -202,7 +203,7 @@ To develop against a local pytincture checkout instead of the pinned git tag:
 |---|---|---|
 | `GANXTERM_ADMIN_USER` | `admin` | Initial admin username (first run only) |
 | `GANXTERM_ADMIN_PASS` | `change_me` | Initial admin password (first run only); asked to change it on every load until it does |
-| `GANXTERM_DATA_DIR` | `./data` (`/data` in the image) | SQLite database, `secret.key`, `session.key` — leave unset in `.env` |
+| `GANXTERM_DATA_DIR` | the repository folder from source (`/data` in the image) | SQLite database, `secret.key`, `session.key` — leave unset in `.env` |
 | `GANXTERM_SECRET_KEY` | *(generated)* | Fernet key for credential encryption |
 | `GANXTERM_SESSION_SECRET` | *(generated)* | Cookie-signing secret |
 | `GANXTERM_PORT` | `8765` | Port on the host, with compose |

@@ -2601,6 +2601,7 @@ class IguanaXterm(MainWindow):
 
         has_password = existing.get("has_password")
         has_key = existing.get("has_private_key")
+        has_passphrase = existing.get("has_passphrase")
         secret_help = (
             "Leave blank to keep the stored value."
             if (has_password or has_key)
@@ -2642,6 +2643,13 @@ class IguanaXterm(MainWindow):
                                      + (" Stored key in place." if has_key else ""),
                                 placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
                                             if not has_key else "Stored — leave blank to keep"),
+                    FieldConfig(id="passphrase", label="Key passphrase", type="password",
+                                span=2, autocomplete="new-password",
+                                help="Only for an encrypted key. A new key replaces "
+                                     "the stored passphrase."
+                                     + (" Leave blank to keep the stored one."
+                                        if has_passphrase else ""),
+                                placeholder="••••••" if has_passphrase else ""),
                     FieldConfig(id="via_session_id", label="Connect", type="select",
                                 span=2, value=str(existing.get("via_session_id") or 0),
                                 help="For VNC. A tunnel reaches a desktop that only "
@@ -2675,6 +2683,7 @@ class IguanaXterm(MainWindow):
                 form.set_field_disabled(field, session_type == "telnet")
             form.set_field_disabled("username", session_type in ("telnet", "vnc"))
             form.set_field_disabled("private_key", session_type in ("telnet", "ftp", "vnc"))
+            form.set_field_disabled("passphrase", session_type in ("telnet", "ftp", "vnc"))
             form.set_field_disabled("via_session_id", session_type != "vnc")
 
         form.on_change(_on_type_change)
@@ -2709,6 +2718,12 @@ class IguanaXterm(MainWindow):
                     payload["private_key"] = values["private_key"]
                 elif not has_key:
                     payload["private_key"] = ""
+                # Omitted keeps the stored passphrase; the service drops it
+                # when the key is replaced and no new passphrase comes along.
+                if values.get("passphrase"):
+                    payload["passphrase"] = values["passphrase"]
+                elif not has_passphrase:
+                    payload["passphrase"] = ""
 
                 result = await SessionService().save_async(**payload)
                 if not result.get("ok"):
@@ -2979,6 +2994,9 @@ _TOOLBAR_CSS = """
 .ix-toolbar-sep{width:1px;height:20px;margin:0 6px;background:#334155;}
 .ix-toolbar-spacer{flex:1 1 auto;}
 .ix-toolbar-user{color:#64748b;font-size:12px;padding-right:6px;}
+/* wapyt's modal sets no font of its own, so every dialog title fell back to
+   the browser's serif default. Same rule as Monguana's. */
+.wapyt-modal{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;}
 .ix-update{display:inline-flex;align-items:center;gap:5px;margin-right:8px;padding:4px 10px;
   border-radius:999px;border:1px solid rgba(16,185,129,.45);background:rgba(16,185,129,.12);
   color:#6ee7b7;font:600 12px system-ui,sans-serif;cursor:pointer;}

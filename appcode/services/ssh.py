@@ -48,6 +48,19 @@ class HostKeyChanged(Exception):
         self.received = received
 
 
+def _is_encrypted(pem: str) -> bool:
+    """Whether some key type reads ``pem`` as an encrypted key."""
+    for key_class in _KEY_CLASSES:
+        try:
+            key_class.from_private_key(io.StringIO(pem), password=None)
+        except paramiko.PasswordRequiredException:
+            return True
+        except paramiko.SSHException:
+            continue
+        return False
+    return False
+
+
 def load_private_key(pem: str, passphrase: str = "") -> paramiko.PKey:
     """
     Parse a PEM private key of any type Paramiko supports.
@@ -74,6 +87,11 @@ def load_private_key(pem: str, passphrase: str = "") -> paramiko.PKey:
         raise paramiko.SSHException(
             "This private key is encrypted and needs its passphrase."
         )
+    # A wrong passphrase surfaces as a format error ("checkints do not match",
+    # "Bad password or corrupt private key file"). If the key asks for a
+    # passphrase without one, it is encrypted, and the one given was wrong.
+    if passphrase and _is_encrypted(pem):
+        raise paramiko.SSHException("The passphrase for this private key is wrong.")
     raise paramiko.SSHException(
         f"Unrecognised private key format ({last_error})."
     )

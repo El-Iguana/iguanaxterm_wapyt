@@ -9,6 +9,9 @@ There was an earlier rewrite attempt at `../iguanaxterm_pyt` using `dhxpyt`. It
 never ran — see *Why the dhxpyt attempt failed* below, because several of its
 mistakes are easy to repeat.
 
+What is planned and not built yet is in `ROADMAP.md` (a native macOS install,
+shared with Monguana's phase 40).
+
 ## Related repos
 
 Siblings under `~/Development/Pytinc/`, each with its own `CLAUDE.md`:

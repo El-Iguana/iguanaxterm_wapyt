@@ -52,6 +52,8 @@ from wapyt import (
     TreeItem,
 )
 
+from services.about import LICENSE as ABOUT_LICENSE, RELEASES_URL, REPO, REPO_URL, VERSION, WIKI_URL
+from services.about_service import AboutService
 from services.downloads import DownloadService
 from services.layout_service import LayoutService
 from services.paths import (
@@ -113,6 +115,7 @@ _TOOLBAR_BUTTONS = (
     ("|", "", ""),
     ("users", "Users", "mdi-account-group"),
     ("password", "Password", "mdi-key"),
+    ("about", "About", "mdi-information-outline"),
 )
 
 
@@ -206,9 +209,11 @@ class IguanaXterm(MainWindow):
         self._grid_proxies: list = []
         self._maximized: str | None = None
         self._me: dict = {}
+        self._release: dict = {}       # AboutService.latest(), once per load
 
         self._build_chrome()
         _spawn(self._load_identity(), "identity load")
+        _spawn(self._check_release(), "release check")
         _spawn(self._boot_workspace(), "workspace boot")
 
     async def _boot_workspace(self) -> None:
@@ -342,6 +347,11 @@ class IguanaXterm(MainWindow):
             '<span class="mdi mdi-view-grid"></span></button>'
             '</span>'
         )
+        # Shown by _check_release when a newer release is out; opens About.
+        parts.append(
+            '<button type="button" class="ix-update" data-action="about" id="ix-update" hidden>'
+            '<span class="mdi mdi-arrow-up-circle"></span><span id="ix-update-text"></span></button>'
+        )
         parts.append('<span class="ix-toolbar-user" id="ix-user"></span>')
         parts.append(
             '<button type="button" class="ix-toolbar-btn" data-action="logout" '
@@ -440,6 +450,80 @@ class IguanaXterm(MainWindow):
             label.textContent = f"{self._me.get('username', '')}{suffix}"
         if self._me.get("must_change_password"):
             self._password_nag()
+
+    # ------------------------------------------------------------------
+    # About, and the release check
+    # ------------------------------------------------------------------
+
+    async def _check_release(self) -> None:
+        """
+        Ask the server whether a newer release is out (``release_check``:
+        cached there, and off with GANXTERM_UPDATE_CHECK=off) and, if so,
+        show the toolbar badge. Quiet on any failure.
+        """
+        result = await AboutService().latest_async()
+        self._release = dict(result) if result.get("ok") else {
+            "checked": False, "reason": "unreachable", "error": result.get("error", "")}
+        badge = js.document.getElementById("ix-update")
+        if badge and self._release.get("newer"):
+            js.document.getElementById("ix-update-text").textContent = f"Update {self._release['latest']}"
+            badge.title = f"IguanaXterm {self._release['latest']} is out — see About"
+            badge.hidden = False
+        status = js.document.getElementById("ix-about-update")
+        if status:
+            status.innerHTML = self._release_html()
+
+    def _release_html(self) -> str:
+        """The About dialog's line on the release check."""
+        esc = html.escape
+        release = self._release
+        if not release:
+            return '<span class="mdi mdi-loading mdi-spin"></span> Checking for a newer release…'
+        if release.get("newer"):
+            published = f" (released {esc(release['published'])})" if release.get("published") else ""
+            return (
+                f'<span class="mdi mdi-arrow-up-circle"></span> <b>IguanaXterm {esc(release["latest"])} '
+                f'is out</b>{published}. <a href="{esc(release.get("url") or RELEASES_URL)}" '
+                'target="_blank" rel="noopener">What\'s new and how to update</a>'
+            )
+        if release.get("checked"):
+            return '<span class="mdi mdi-check-circle-outline"></span> This is the latest release.'
+        if release.get("reason") == "off":
+            return ('<span class="mdi mdi-minus-circle-outline"></span> Release checks are off '
+                    "(GANXTERM_UPDATE_CHECK). "
+                    f'<a href="{RELEASES_URL}" target="_blank" rel="noopener">See releases</a>')
+        return ('<span class="mdi mdi-cloud-off-outline"></span> Could not check for a newer release. '
+                f'<a href="{RELEASES_URL}" target="_blank" rel="noopener">See releases</a>')
+
+    def _about_dialog(self) -> None:
+        esc = html.escape
+        links = (
+            ("mdi-book-open-variant", "Wiki", "How to use it", WIKI_URL),
+            ("mdi-github", "Source", REPO, REPO_URL),
+            ("mdi-tag-outline", "Releases", "Downloads and what changed", RELEASES_URL),
+            ("mdi-bug-outline", "Issues", "Report a problem or ask for a feature",
+             f"{REPO_URL}/issues"),
+        )
+        modal = ModalWindow(ModalConfig(dispose_on_close=True, title="About IguanaXterm", width=520, height=400))
+        modal.body.innerHTML = (
+            '<div class="ix-about">'
+            '<div class="ix-about-head">'
+            '<img class="ix-about-logo" src="/static/el_iguana_avatar.webp" alt="">'
+            '<div><div class="ix-about-name">IguanaXterm '
+            f'<span class="ix-about-version">{esc(VERSION)}</span></div>'
+            '<div class="ix-about-sub">SSH, Telnet, SFTP, FTP and VNC in the browser · pytincture · wapyt · '
+            f'{esc(ABOUT_LICENSE)} license</div></div></div>'
+            f'<div class="ix-about-update" id="ix-about-update">{self._release_html()}</div>'
+            '<div class="ix-about-links">' + "".join(
+                f'<a class="ix-about-link" href="{esc(url)}" target="_blank" rel="noopener">'
+                f'<span class="mdi {icon}"></span><span><b>{esc(label)}</b>'
+                f'<small>{esc(hint)}</small></span></a>'
+                for icon, label, hint, url in links
+            ) + "</div></div>"
+        )
+        modal.show()
+        if not self._release:
+            _spawn(self._check_release(), "release check")
 
     def _password_nag(self) -> None:
         """
@@ -562,6 +646,8 @@ class IguanaXterm(MainWindow):
             _spawn(self._admin_panel(), "admin panel")
         elif action == "password":
             self._password_dialog()
+        elif action == "about":
+            self._about_dialog()
         elif action == "saved":
             _spawn(self._saved_panel(), "saved files")
         elif action == "reconnect_all":
@@ -2893,6 +2979,27 @@ _TOOLBAR_CSS = """
 .ix-toolbar-sep{width:1px;height:20px;margin:0 6px;background:#334155;}
 .ix-toolbar-spacer{flex:1 1 auto;}
 .ix-toolbar-user{color:#64748b;font-size:12px;padding-right:6px;}
+.ix-update{display:inline-flex;align-items:center;gap:5px;margin-right:8px;padding:4px 10px;
+  border-radius:999px;border:1px solid rgba(16,185,129,.45);background:rgba(16,185,129,.12);
+  color:#6ee7b7;font:600 12px system-ui,sans-serif;cursor:pointer;}
+.ix-update[hidden]{display:none;}
+.ix-update:hover{background:rgba(16,185,129,.22);}
+.ix-about{display:flex;flex-direction:column;gap:14px;padding:4px 2px;font:13px/1.5 system-ui,sans-serif;color:#cbd5f5;}
+.ix-about-head{display:flex;align-items:center;gap:14px;}
+.ix-about-logo{width:56px;height:56px;border-radius:50%;}
+.ix-about-name{font-size:20px;font-weight:600;color:#e2e8f0;}
+.ix-about-version{font:600 13px ui-monospace,Menlo,Consolas,monospace;color:#6ee7b7;margin-left:4px;}
+.ix-about-sub{color:#94a3b8;font-size:12px;}
+.ix-about-update{padding:8px 10px;border-radius:6px;background:#111827;border:1px solid #334155;}
+.ix-about-update .mdi-arrow-up-circle{color:#34d399;}
+.ix-about-update a,.ix-about-link{color:#6ee7b7;}
+.ix-about-links{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.ix-about-link{display:flex;align-items:flex-start;gap:9px;padding:9px 10px;border-radius:6px;
+  border:1px solid #334155;text-decoration:none;}
+.ix-about-link:hover{background:#1f2937;}
+.ix-about-link .mdi{font-size:20px;line-height:1.1;}
+.ix-about-link b{display:block;color:#e2e8f0;font-weight:600;}
+.ix-about-link small{color:#94a3b8;font-size:11.5px;}
 """
 
 _SIDEBAR_CSS = """

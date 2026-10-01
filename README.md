@@ -9,7 +9,11 @@ connections from a single web UI — no client software required. Tile them side
 by side, or keep them in tabs; either way the workspace is there when you come
 back.
 
-![IguanaXterm](appcode/static/el_iguana.png)
+![IguanaXterm: sessions in folders, and four tiled panes: SSH terminals on three servers and a file browser in a backups folder](docs/images/iguanaxterm.png)
+
+**📖 The [wiki](https://github.com/El-Iguana/iguanaxterm_wapyt/wiki) is the
+user guide**: installing and updating, connections, the workspace, the
+terminal, files, remote desktops, administration and troubleshooting.
 
 Version 2 is a rewrite onto [pytincture](https://github.com/pytincture/pytincture)
 and the [wapyt](https://github.com/WAwesome-AI/wa_pytincture_widgetset)
@@ -207,6 +211,7 @@ To develop against a local pytincture checkout instead of the pinned git tag:
 | `GANXTERM_MAX_UPLOAD_BYTES` | `68719476736` (64 GiB) | Largest single upload. Every other request stays capped at 2 MiB |
 | `GANXTERM_DOWNLOAD_DIR` | `$GANXTERM_DATA_DIR/downloads` | Where folder downloads are saved on the server, one subfolder per user |
 | `GANXTERM_DOWNLOAD_HOST_DIR` | `~/Downloads/IguanaXterm` | Host folder mounted at `/downloads` by the downloads options (INSTALL.md §6); also what messages show |
+| `GANXTERM_UPDATE_CHECK` | `on` | `off` stops the server asking GitHub whether a newer release is out (About, and the toolbar's *Update* badge) |
 | `GANXTERM_BIND` | `0.0.0.0` | Listen address (`127.0.0.1` with host networking) |
 | `PORT` | `8765` | Listen port of the service itself |
 

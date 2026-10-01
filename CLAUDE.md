@@ -40,6 +40,9 @@ appcode/                # pytincture modules_path
     paths.py            #   path/format helpers + SESSION_TYPES — BOTH sides
     session_service.py  #   BFF: connection profiles
     user_service.py     #   BFF: accounts
+    about.py            #   version + project links — BOTH sides
+    release_check.py    #   GitHub latest-release check, cached — plain module
+    about_service.py    #   BFF: AboutService.latest() for About + the badge
     sftp_service.py     #   BFF: directory ops + the connection pool
     terminal_ws.py      #   WebSocket relay (SSH + Telnet)
     transfer.py         #   plain routes for binary upload/download
@@ -829,6 +832,17 @@ Worth knowing, because most of these are framework-shaped rather than typos:
 ## Conventions carried from the original
 
 - `GANXTERM_*` environment prefix, `/data` volume, SQLite + Fernet at rest.
+- **A release bumps the version in two places**: `pyproject.toml` and
+  `appcode/services/about.py` (`VERSION`, shown in About), plus the README
+  badge and `uv lock`. `tests/test_about.py` fails if the two disagree. Tag
+  `vX.Y.Z` on `main`; `windows.yml` builds the installer and the release.
+- **About and the release check** come from Monguana: `about.py` (both
+  sides), `release_check.py` (GitHub's latest-release API, cached 6 h / 30
+  min on failure, a plain module because BFF modules are re-executed per
+  call), `about_service.py` (the BFF). Off with `GANXTERM_UPDATE_CHECK=off`.
+  In `iguanaxterm.py`, import *names* from `services.about`, never
+  `from services import about`: the browser package does not follow that
+  form, and the app boots to a blank page.
 - `.gitignore` excludes `.env`, `data/`, `*.db`, `secret.key`, `session.key`
   and the rebuilt dev wheel. This file is tracked, unlike in the v1 repo —
   the framework pitfalls below are the expensive part of the project.

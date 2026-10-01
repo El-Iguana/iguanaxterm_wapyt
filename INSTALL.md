@@ -331,13 +331,32 @@ does not start containers at boot by itself; a Quadlet or
 
 **Update to a newer version**
 
+From 2.1.0, IguanaXterm says when a newer release is out: an **Update x.y.z**
+badge in the toolbar, and a link in **About**, which also shows the version
+you are running (`GANXTERM_UPDATE_CHECK=off` stops the check). Before 2.1.0,
+watch the repository's releases on GitHub (**Watch → Custom → Releases**).
+
 ```sh
 git pull
 docker compose up -d --build
 ```
 
-Your accounts, saved sessions and layouts live in the `iguanaxterm-data`
-volume and survive updates and rebuilds.
+Use the same compose files you started with: `-f compose.host-network.yaml`,
+or `-f compose.yaml -f compose.downloads.yaml`, after `compose`.
+
+- **Installed from a ZIP:** unzip the new version into a new folder, copy
+  your `.env` into it, and run the same command there. The compose project,
+  container and volume have fixed names, so it takes over the same data.
+- **Running with the `podman run` command** of section 6: `git pull`, then
+  `podman rm -f iguanaxterm` and the `podman build` and `podman run` commands
+  from section 6 again.
+- **The Windows installer:** see [section 12](#12-windows-without-docker-native-installer);
+  run the new `setup.exe` over the old one.
+
+Your accounts, saved sessions, pinned host keys and layouts live in the
+`iguanaxterm-data` volume and survive updates and rebuilds. The database is
+updated on the first start and only ever gains columns or tables; to go back
+to an older version, restore a backup taken before updating (below).
 
 **Back up the data volume** — the SQLite database, `secret.key` (which
 encrypts every stored password and private key) and folders saved on the
@@ -478,7 +497,8 @@ HTTPS is also what gives browsers on other machines the folder picker
 ## 10. Troubleshooting
 
 **The page says `Invalid host header`.** You opened `localhost` (or another
-name). Use `http://127.0.0.1:8765` exactly, or set up
+name). Use `http://127.0.0.1:8765/iguanaxterm` exactly (with your
+`GANXTERM_PORT` if you changed it), or set up
 [section 9](#9-reaching-iguanaxterm-from-other-machines).
 
 **`port is already allocated` / `address already in use`.** Something else

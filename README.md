@@ -203,7 +203,7 @@ To develop against a local pytincture checkout instead of the pinned git tag:
 |---|---|---|
 | `GANXTERM_ADMIN_USER` | `admin` | Initial admin username (first run only) |
 | `GANXTERM_ADMIN_PASS` | `change_me` | Initial admin password (first run only); asked to change it on every load until it does |
-| `GANXTERM_DATA_DIR` | `./data` (`/data` in the image) | SQLite database, `secret.key`, `session.key` — leave unset in `.env` |
+| `GANXTERM_DATA_DIR` | the repository folder from source (`/data` in the image) | SQLite database, `secret.key`, `session.key` — leave unset in `.env` |
 | `GANXTERM_SECRET_KEY` | *(generated)* | Fernet key for credential encryption |
 | `GANXTERM_SESSION_SECRET` | *(generated)* | Cookie-signing secret |
 | `GANXTERM_PORT` | `8765` | Port on the host, with compose |

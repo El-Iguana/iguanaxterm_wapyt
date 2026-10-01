@@ -257,6 +257,7 @@ def build_app():
         )
     )
 
+    pytincture_compat.apply_to_app(application)
     # Relabel pytincture's hardcoded email login field; see login_page.py.
     check_at_startup()
     application.add_middleware(LoginPageMiddleware)

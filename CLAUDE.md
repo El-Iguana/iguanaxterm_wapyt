@@ -113,6 +113,18 @@ no widgets load.
 
 ## Things that will bite
 
+### pytincture's service worker is turned off
+
+Its scope is `/iguanaxterm/` but the page is `/iguanaxterm`, so the worker
+never controls the page, caches nothing, and the loader waited out a 5 s
+timeout for it on every load (7.2 s → 2.0 s without it).
+`pytincture_compat.apply_to_app` serves the page with
+`enableServiceWorker: false`. It has to patch the backend `create_app()`
+returns: `create_app` loads a private copy of `pytincture.backend.app`, so
+patching the imported module does nothing. When pytincture stops hard-coding
+the worker on, `test_the_template_still_needs_the_patch` fails; drop the
+patch then. Same patch in Monguana.
+
 ### `APP_ENTRYPOINT` is mandatory
 
 pytincture resolves the browser entrypoint by AST and its MainWindow detection

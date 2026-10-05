@@ -114,7 +114,7 @@ jobs:
           $status = & "$app\python\python.exe" "$app\app\iguanaxterm_launcher.py" --status
           $port = ([uri]$status).Port
           foreach ($asset in 'xterm/xterm.js', 'novnc/core/rfb.js') {
-            $r = Invoke-WebRequest "http://127.0.0.1:$port/$asset" -UseBasicParsing
+            $r = Invoke-WebRequest "http://$(([uri]$status).Host):$port/$asset" -UseBasicParsing
             "$asset : $($r.StatusCode) $($r.Headers['Content-Type'])"
             if ($r.Headers['Content-Type'] -notlike 'text/javascript*') { throw "wrong MIME type for $asset" }
           }

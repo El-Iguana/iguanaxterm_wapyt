@@ -599,13 +599,17 @@ the `windows` GitHub Actions workflow). Windows 10 or 11, 64-bit.
   IguanaXterm** to the Start menu. It can also add a desktop shortcut and
   start IguanaXterm when you sign in.
 - Starting **IguanaXterm** runs the server in the background and opens
-  `http://127.0.0.1:8765/iguanaxterm` in your default browser. If 8765 is
+  `http://127.0.0.3:8765/iguanaxterm` in your default browser. If 8765 is
   taken, it uses the next free port. A tray icon offers **Open IguanaXterm**,
   **Show downloads folder**, **Show log folder** and **Quit IguanaXterm**.
   Starting it again while it runs just opens the browser.
-- **Plain HTTP is safe here** because it listens on 127.0.0.1 only: nothing
-  outside your computer can reach it. Use `127.0.0.1` exactly, not
-  `localhost`, which answers *400 Invalid host header*.
+- **Plain HTTP is safe here** because it listens on 127.0.0.3 only: nothing
+  outside your computer can reach it. Use `127.0.0.3` exactly, not
+  `localhost`, which answers *400 Invalid host header*. It is `127.0.0.3`
+  rather than `127.0.0.1` so that signing in to another pytincture app, such
+  as Monguana, does not sign you out of IguanaXterm: they share a cookie name,
+  and browsers share cookies across ports. `GANXTERM_HOST` picks another
+  address.
 
 **First start:** sign in as **`admin`** with password **`change_me`** (a
 message box reminds you). IguanaXterm then asks you to choose your own

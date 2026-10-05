@@ -493,8 +493,13 @@ and the browser wapyt wheel — and with `--installer` runs Inno Setup
 so the `windows` workflow builds, silently installs, runs `--check`,
 start/stop (checking xterm and noVNC are served as `text/javascript`, and the
 downloads folder) and uninstall on `windows-latest`. `launcher.py` (installed
-as `app\iguanaxterm_launcher.py`) runs the server on 127.0.0.1, port 8765 or
-the next free one; data in `%LOCALAPPDATA%\IguanaXterm`.
+as `app\iguanaxterm_launcher.py`) runs the server on 127.0.0.3
+(`GANXTERM_HOST`), port 8765 or the next free one; data in
+`%LOCALAPPDATA%\IguanaXterm`. Its own loopback address because cookies are
+per host, not per port, and pytincture hard-codes the session cookie name:
+next to Monguana (127.0.0.2) or any other pytincture app on 127.0.0.1, each
+sign-in clobbered the other's. Drop it once pytincture/pytincture#375 lets an
+app name its cookie.
 
 - **`pytincture_compat.py`** works around pytincture being unable to read any
   contained file on Windows (it opens a *directory* with `os.open()`); the

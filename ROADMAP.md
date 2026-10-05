@@ -15,7 +15,10 @@ In short:
 
 - **Carries over:** the launcher (`tools/windows/launcher.py`, already
   cross-platform and tested on Linux), the bundled-Python approach, and
-  plain HTTP on 127.0.0.1. `pytincture_compat`'s Windows patch is not needed
+  plain HTTP on loopback. The launcher defaults to 127.0.0.3 (its own
+  cookie jar, see CLAUDE.md), which macOS does not answer without
+  `ifconfig lo0 alias 127.0.0.3`: the macOS build must add the alias or set
+  `GANXTERM_HOST=127.0.0.1`. `pytincture_compat`'s Windows patch is not needed
   on macOS; the service-worker patch applies as everywhere.
 - **Apple Silicon first, unsigned.** Every compiled package in `uv.lock` (12)
   publishes macOS arm64 wheels. Intel is blocked the same way as in Monguana:

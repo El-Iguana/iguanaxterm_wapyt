@@ -6,13 +6,14 @@ The installer puts this next to ``service.py`` as ``iguanaxterm_launcher.py``
 and points the Start-menu shortcut at it through ``pythonw.exe``. It:
 
 * keeps one instance: a second launch just opens the browser on the first;
-* picks port 8765, or the next free one up to 8799, on 127.0.0.1 only;
+* picks port 8765, or the next free one up to 8799, on 127.0.0.3 only
+  (``GANXTERM_HOST`` overrides it; see ``HOST`` below);
 * on the first run, says how to sign in: ``admin`` / ``change_me``, which
   the app then asks you to change on every load until you do;
 * starts ``service.py`` as a child process, logging to ``logs\\server.log``;
 * saves server-side folder downloads to ``Downloads\\IguanaXterm``, since
   "the server" is this computer;
-* opens ``http://127.0.0.1:<port>/iguanaxterm`` in the default browser —
+* opens ``http://127.0.0.3:<port>/iguanaxterm`` in the default browser —
   never ``localhost``, which pytincture answers with 400;
 * sits in the tray (Open / Downloads / Log folder / Quit) until Quit or the
   server dies.
@@ -50,6 +51,13 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 APPLICATION = "iguanaxterm"
 FIRST_PORT, LAST_PORT = 8765, 8799
+# IguanaXterm's own loopback address. Browsers keep cookies per host, not per
+# port, and every pytincture app names its session cookie the same: sharing
+# 127.0.0.1 with another pytincture app (Monguana uses 127.0.0.2), signing in
+# to one signs you out of the other. Windows answers on all of 127.0.0.0/8
+# with no setup. Drop this once pytincture lets an app name its cookie
+# (pytincture/pytincture#375).
+HOST = os.environ.get("GANXTERM_HOST", "").strip() or "127.0.0.3"
 START_TIMEOUT = 120  # seconds; the first start builds pytincture's browser assets
 IS_WINDOWS = sys.platform == "win32"
 
@@ -120,12 +128,12 @@ def message(text: str, title: str = "IguanaXterm", error: bool = False) -> None:
 # ── the running instance ────────────────────────────────────────────────────
 
 def url(port: int) -> str:
-    return f"http://127.0.0.1:{port}/{APPLICATION}"
+    return f"http://{HOST}:{port}/{APPLICATION}"
 
 
 def healthy(port: int, timeout: float = 2.0) -> bool:
     request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/healthz", headers={"Host": f"127.0.0.1:{port}"}
+        f"http://{HOST}:{port}/healthz", headers={"Host": f"{HOST}:{port}"}
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -164,7 +172,7 @@ def free_port() -> int | None:
     for port in range(FIRST_PORT, LAST_PORT + 1):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
             try:
-                probe.bind(("127.0.0.1", port))
+                probe.bind((HOST, port))
             except OSError:
                 continue
             return port
@@ -210,10 +218,10 @@ def start_server(port: int) -> subprocess.Popen:
     env = dict(os.environ)
     env.update({
         "GANXTERM_DATA_DIR": str(DATA),
-        "GANXTERM_BIND": "127.0.0.1",
+        "GANXTERM_BIND": HOST,
         "PORT": str(port),
-        "GANXTERM_CANONICAL_ORIGIN": f"http://127.0.0.1:{port}",
-        "GANXTERM_ALLOWED_HOSTS": "127.0.0.1",
+        "GANXTERM_CANONICAL_ORIGIN": f"http://{HOST}:{port}",
+        "GANXTERM_ALLOWED_HOSTS": HOST,
         "GANXTERM_DOWNLOAD_DIR": str(downloads_dir()),
         "PYTHONUNBUFFERED": "1",
         # UTF-8 for open() and the log, whatever the Windows code page is.
@@ -264,7 +272,7 @@ def launch() -> tuple[subprocess.Popen, int] | None:
     DATA.mkdir(parents=True, exist_ok=True)
     port = free_port()
     if port is None:
-        message(f"No free port between {FIRST_PORT} and {LAST_PORT} on 127.0.0.1.", error=True)
+        message(f"No free port between {FIRST_PORT} and {LAST_PORT} on {HOST}.", error=True)
         return None
     first_run = not (DATA / "iguanaxterm.db").exists()
     server = start_server(port)
@@ -408,7 +416,7 @@ def cmd_check(_args) -> int:
         return 1
     server, port = started
     try:
-        request = urllib.request.Request(url(port), headers={"Host": f"127.0.0.1:{port}"})
+        request = urllib.request.Request(url(port), headers={"Host": f"{HOST}:{port}"})
         with urllib.request.urlopen(request, timeout=30) as response:
             page = response.read().decode("utf-8", "replace")
         # The login page, with IguanaXterm's "Username" rewrite applied.

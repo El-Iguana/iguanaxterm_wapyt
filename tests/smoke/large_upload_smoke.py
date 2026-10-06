@@ -87,14 +87,14 @@ with sync_playwright() as p:
         page.fill('input[name="email"]', "admin")
         page.fill('input[name="password"]', "testpass123")
         page.click('input[type="submit"]')
-    page.wait_for_selector(".ix-toolbar", timeout=180000)
+    page.wait_for_selector(".wapyt-toolbar", timeout=180000)
     reset_workspace(page)
 
     for name, spec in PROFILES.items():
         expand_all(page)
         if name in session_ids(page):
             continue
-        page.click('.ix-toolbar-btn[data-action="new"]')
+        page.click('.wapyt-toolbar-btn[data-id="new"]')
         # A closed dialog's form stays in the DOM, hidden; address the open one.
         form = page.locator(".wapyt-modal-body:visible .wapyt-form-body")
         form.wait_for(timeout=30000)

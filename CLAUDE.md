@@ -466,6 +466,18 @@ laggy. The Python `Terminal` wrapper drives lifecycle only.
 Same reasoning for file transfers: they use `services/transfer.py`, not the BFF,
 because a JSON BFF means base64 — a third larger and resident in Pyodide's heap.
 
+### The header toolbar is a wapyt `Toolbar`
+
+`_toolbar_config()` builds it from `_TOOLBAR_BUTTONS` plus Reconnect all,
+the tabbed/tiled switch (a `group="mode"` pair), the update notice, the user
+name and Logout; `_on_toolbar_click` routes clicks. Change it through the
+widget (`set_hidden`, `set_text`, `set_active`), never by querying its DOM:
+`_sync_reconnect_all`, `_sync_mode_buttons`, `_load_identity` and
+`_check_release` all do. In narrow windows it drops to icons on its own.
+The per-pane SFTP toolbars are still HTML, handled by the one document-level
+delegated listener in `_wire_toolbar`. Smoke tests select header buttons as
+`.wapyt-toolbar-btn[data-id="…"]`.
+
 ### Toasts and dialogs go through `wapyt.message`
 
 `self._toast(text, kind=...)` is a one-line delegate to `message.toast`; pass
@@ -474,8 +486,8 @@ because a JSON BFF means base64 — a third larger and resident in Pyodide's hea
 second one no longer replaces the first. Never call `js.confirm()` or
 `js.prompt()`: use `await message.confirm(..., danger=True)` /
 `await message.prompt(...)` from an async method. `prompt` returns `None` when
-cancelled and `""` when left empty. The admin password reset prompt shows its
-text as typed, as `js.prompt` did; `message.prompt` has no password mode.
+cancelled and `""` when left empty. The admin password reset prompt passes
+`password=True`, which masks it.
 
 ### JS `null` is `JsNull`, not `None`
 
@@ -483,8 +495,8 @@ text as typed, as `js.prompt` did; `message.prompt` has no password mode.
 which crosses the FFI as `JsNull`. **`JsNull is None` is `False`**, so an
 `if x is None: return` guard never fires and the next attribute access raises.
 `JsNull` is falsy, so test truthiness (`if not element:`) for anything that
-comes back from the DOM. This bit the toolbar's delegated click handler: every
-click *outside* the toolbar raised an AttributeError.
+comes back from the DOM. This bit the document-level delegated click handler:
+every click *outside* the toolbar raised an AttributeError.
 
 ### A hidden tab has no size
 
@@ -791,13 +803,14 @@ tab inside the connection's own pane.
   is why the browser could not tell the difference.
 - **Narrow panes are handled (Phase 2, 2026-09-23)** with container queries on
   `.ix-pane`, not media queries: a pane is narrow because its cell is narrow,
-  which has nothing to do with the window. Measured, not guessed — the toolbar's
-  natural width is **469px**, so it starts clipping just under that:
+  which has nothing to do with the window. Measured, not guessed — the SFTP
+  pane toolbar's natural width is **469px**, so it starts clipping just under
+  that (the header toolbar is a wapyt `Toolbar` and compacts itself):
 
   | tier | what gives way |
   |---|---|
   | ≤700px | the capability note's sentence (icon keeps it as a tooltip); `permissions` column |
-  | ≤560px | toolbar labels → icons; `modified` column |
+  | ≤560px | SFTP toolbar labels → icons; `modified` column |
   | ≤420px | crumb width, queue name and status widths |
 
   The worst of it was not the toolbar. Below ~500px the fixed columns squeezed

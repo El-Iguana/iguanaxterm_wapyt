@@ -35,7 +35,7 @@ def login(pg):
         pg.fill('input[name="email"]', "admin")
         pg.fill('input[name="password"]', "testpass123")
         pg.click('input[type="submit"]')
-    pg.wait_for_selector(".ix-toolbar", timeout=180000)
+    pg.wait_for_selector(".wapyt-toolbar", timeout=180000)
     pg.wait_for_timeout(600)
 
 
@@ -54,7 +54,7 @@ with sync_playwright() as p:
     login(pg)
     reset_workspace(pg)
     if pg.locator(".wapyt-tree-row").count() == 0:
-        pg.click('.ix-toolbar-btn[data-action="new"]')
+        pg.click('.wapyt-toolbar-btn[data-id="new"]')
         pg.wait_for_selector(".wapyt-modal-body .wapyt-form-body", timeout=30000)
         pg.fill('[name="name"]', "alpine-box")
         pg.fill('[name="host"]', "127.0.0.1")
@@ -83,7 +83,7 @@ with sync_playwright() as p:
 
     first_pane = open_pane()
     second_pane = open_pane()
-    pg.click('.ix-mode-btn[data-mode="tiled"]')
+    pg.click('.wapyt-toolbar-btn[data-group="mode"][data-id="tiled"]')
     pg.wait_for_selector("#ix-grid-host .grid-stack-item", timeout=30000)
     pg.wait_for_timeout(1200)
 
@@ -114,7 +114,7 @@ with sync_playwright() as p:
     pg.wait_for_timeout(3000)
 
     after = pg.evaluate("""() => ({
-      mode: document.querySelector('.ix-mode-btn[aria-selected="true"]').dataset.mode,
+      mode: document.querySelector('.wapyt-toolbar-btn[data-group="mode"][aria-pressed="true"]').dataset.id,
       items: [...document.querySelectorAll('#ix-grid-host .grid-stack-item')].map(i => ({
          pane: i.dataset.pane,
          x: +i.getAttribute('gs-x'), y: +i.getAttribute('gs-y'),

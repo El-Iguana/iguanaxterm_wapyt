@@ -111,14 +111,14 @@ def login(page):
         page.fill('input[name="password"]', "testpass123")
         page.click('input[type="submit"]')
         page.wait_for_load_state("domcontentloaded")
-    page.wait_for_selector(".ix-toolbar", timeout=180000)
+    page.wait_for_selector(".wapyt-toolbar", timeout=180000)
     reset_workspace(page)
 
 
 def open_sftp(page):
     page.wait_for_selector(".wapyt-tree-row", timeout=30000)
     session_leaf(page).click()
-    page.click('.ix-toolbar-btn[data-action="sftp"]')
+    page.click('.wapyt-toolbar-btn[data-id="sftp"]')
     page.wait_for_selector(".wapyt-datatable-table tbody tr", timeout=30000)
 
 

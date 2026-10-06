@@ -34,11 +34,11 @@ with sync_playwright() as p:
         pg.fill('input[name="email"]', "admin")
         pg.fill('input[name="password"]', "testpass123")
         pg.click('input[type="submit"]')
-    pg.wait_for_selector(".ix-toolbar", timeout=180000)
+    pg.wait_for_selector(".wapyt-toolbar", timeout=180000)
     reset_workspace(pg)
     pg.wait_for_timeout(500)
     if pg.locator(".wapyt-tree-row").count() == 0:
-        pg.click('.ix-toolbar-btn[data-action="new"]')
+        pg.click('.wapyt-toolbar-btn[data-id="new"]')
         pg.wait_for_selector(".wapyt-modal-body .wapyt-form-body", timeout=30000)
         pg.fill('[name="name"]', "alpine-box")
         pg.fill('[name="host"]', "127.0.0.1")
@@ -50,7 +50,7 @@ with sync_playwright() as p:
     pg.wait_for_timeout(400)
     leaf = session_leaf(pg)
 
-    check(pg.locator(".ix-mode-btn").count() == 2, "mode switch in the toolbar")
+    check(pg.locator(".wapyt-toolbar-btn[data-group=\"mode\"]").count() == 2, "mode switch in the toolbar")
 
     # Two connections, each with a marker in its scrollback.
     for n in (1, 2):
@@ -65,7 +65,7 @@ with sync_playwright() as p:
           "two panes with distinct scrollback")
 
     # ── switch to tiled ─────────────────────────────────────────────────────
-    pg.click('.ix-mode-btn[data-mode="tiled"]')
+    pg.click('.wapyt-toolbar-btn[data-group="mode"][data-id="tiled"]')
     pg.wait_for_selector("#ix-grid-host .grid-stack-item", timeout=30000)
     pg.wait_for_timeout(1800)
 
@@ -161,7 +161,7 @@ with sync_playwright() as p:
     pg.screenshot(path="/tmp/claude-1000/ix_tiled_names.png")
 
     # ── back to tabbed ──────────────────────────────────────────────────────
-    pg.click('.ix-mode-btn[data-mode="tabbed"]')
+    pg.click('.wapyt-toolbar-btn[data-group="mode"][data-id="tabbed"]')
     pg.wait_for_timeout(1500)
     back = pg.evaluate("""() => ({
       gridHidden: document.getElementById('ix-grid-host').hidden,
@@ -180,7 +180,7 @@ with sync_playwright() as p:
           "both scrollbacks survived the round trip")
 
     # ── closing from the pane's own button while tiled ──────────────────────
-    pg.click('.ix-mode-btn[data-mode="tiled"]')
+    pg.click('.wapyt-toolbar-btn[data-group="mode"][data-id="tiled"]')
     pg.wait_for_timeout(1200)
     pg.click('.ix-pane-close[data-pane-close="pane_1"]')
     pg.wait_for_timeout(1200)

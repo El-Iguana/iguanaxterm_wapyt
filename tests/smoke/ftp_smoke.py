@@ -47,7 +47,7 @@ def login(page):
         page.fill('input[name="email"]', "admin")
         page.fill('input[name="password"]', "testpass123")
         page.click('input[type="submit"]')
-    page.wait_for_selector(".ix-toolbar", timeout=180000)
+    page.wait_for_selector(".wapyt-toolbar", timeout=180000)
 
 
 def rows(page, pane):
@@ -76,7 +76,7 @@ with sync_playwright() as p:
     # ── the editor ───────────────────────────────────────────────────────────
     expand_lab()
     if page.locator(f".wapyt-tree-row:has-text('{NAME}')").count() == 0:
-        page.click('.ix-toolbar-btn[data-action="new"]')
+        page.click('.wapyt-toolbar-btn[data-id="new"]')
         page.wait_for_selector(".wapyt-modal-body .wapyt-form-body", timeout=30000)
         options = page.eval_on_selector_all(
             '[name="session_type"] option', "els => els.map(e => e.value)"

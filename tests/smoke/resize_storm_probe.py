@@ -29,12 +29,12 @@ with sync_playwright() as p:
     if "/login" in pg.url:
         pg.fill('input[name="email"]', "admin"); pg.fill('input[name="password"]', "testpass123")
         pg.click('input[type="submit"]')
-    pg.wait_for_selector(".ix-toolbar", timeout=180000); pg.wait_for_timeout(500)
+    pg.wait_for_selector(".wapyt-toolbar", timeout=180000); pg.wait_for_timeout(500)
     reset_workspace(pg)
     session_leaf(pg).dblclick()
     pg.wait_for_selector("#pane-term-pane_1 .xterm-rows", timeout=60000)
     pg.wait_for_timeout(2500)
-    pg.click('.ix-mode-btn[data-mode="tiled"]')
+    pg.click('.wapyt-toolbar-btn[data-group="mode"][data-id="tiled"]')
     pg.wait_for_selector("#ix-grid-host .grid-stack-item", timeout=30000)
     pg.wait_for_timeout(1500)
 

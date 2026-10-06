@@ -2994,9 +2994,6 @@ _TOOLBAR_CSS = """
 .ix-toolbar-sep{width:1px;height:20px;margin:0 6px;background:#334155;}
 .ix-toolbar-spacer{flex:1 1 auto;}
 .ix-toolbar-user{color:#64748b;font-size:12px;padding-right:6px;}
-/* wapyt's modal sets no font of its own, so every dialog title fell back to
-   the browser's serif default. Same rule as Monguana's. */
-.wapyt-modal{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;}
 .ix-update{display:inline-flex;align-items:center;gap:5px;margin-right:8px;padding:4px 10px;
   border-radius:999px;border:1px solid rgba(16,185,129,.45);background:rgba(16,185,129,.12);
   color:#6ee7b7;font:600 12px system-ui,sans-serif;cursor:pointer;}

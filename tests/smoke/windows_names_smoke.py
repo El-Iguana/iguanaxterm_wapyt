@@ -63,7 +63,7 @@ def download_folder(page, folder):
 
 def open_files(page):
     session_leaf(page).click()
-    page.click('.ix-toolbar-btn[data-action="sftp"]')
+    page.click('.wapyt-toolbar-btn[data-id="sftp"]')
     page.wait_for_selector(".wapyt-datatable-table tbody tr", timeout=30000)
     page.click('.ix-sftp-btn[data-sftp="refresh"]')
     page.wait_for_function(

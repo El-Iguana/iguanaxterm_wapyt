@@ -121,7 +121,7 @@ with sync_playwright() as p:
     check(not list(saved.rglob("*.part")), "no partial files left behind")
 
     # ── Saved files ──────────────────────────────────────────────────────────
-    page.click('.ix-toolbar-btn[data-action="saved"]')
+    page.click('.wapyt-toolbar-btn[data-id="saved"]')
     page.wait_for_selector("#ix-saved-table td[data-column-id='name']", timeout=30000)
     names = page.eval_on_selector_all("#ix-saved-table td[data-column-id='name']",
                                       "els => els.map(e => e.innerText.trim())")
@@ -159,7 +159,7 @@ with sync_playwright() as p:
     page = brave.new_page()
     login(page)
     session_leaf(page).click()
-    page.click('.ix-toolbar-btn[data-action="sftp"]')
+    page.click('.wapyt-toolbar-btn[data-id="sftp"]')
     page.wait_for_selector(".wapyt-datatable-table tbody tr", timeout=30000)
     page.wait_for_function(
         "() => (document.querySelector('.ix-sftp-note-text') || {}).textContent", timeout=15000)

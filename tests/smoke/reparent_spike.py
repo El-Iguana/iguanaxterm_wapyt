@@ -73,13 +73,13 @@ with sync_playwright() as p:
         pg.fill('input[name="email"]', "admin")
         pg.fill('input[name="password"]', "testpass123")
         pg.click('input[type="submit"]')
-    pg.wait_for_selector(".ix-toolbar", timeout=180000)
+    pg.wait_for_selector(".wapyt-toolbar", timeout=180000)
     reset_workspace(pg)
 
     # Seed the session through the real dialog unless it is already there.
     pg.wait_for_timeout(500)
     if pg.locator(".wapyt-tree-row").count() == 0:
-        pg.click('.ix-toolbar-btn[data-action="new"]')
+        pg.click('.wapyt-toolbar-btn[data-id="new"]')
         pg.wait_for_selector(".wapyt-modal-body .wapyt-form-body", timeout=30000)
         pg.fill('[name="name"]', "alpine-box")
         pg.fill('[name="host"]', "127.0.0.1")

@@ -46,6 +46,12 @@ from wapyt import (
     Terminal,
     TerminalConfig,
     TerminalTheme,
+    Toolbar,
+    ToolbarButton,
+    ToolbarConfig,
+    ToolbarSeparator,
+    ToolbarSpacer,
+    ToolbarText,
     Tree,
     TreeAction,
     TreeConfig,
@@ -198,6 +204,7 @@ class IguanaXterm(MainWindow):
         self._sftp_tabs: dict[str, dict] = {}   # pane id -> {table, session_id, path}
         self._tab_counter = 0
         self._mode = "tabbed"      # or "tiled"
+        self._toolbar = None       # the header Toolbar, once _build_chrome runs
         self._restoring = False    # suppresses saves while rebuilding
         self._reconnecting_all = False
         self._reconnect_progress = ""  # the button's label while it runs
@@ -228,7 +235,8 @@ class IguanaXterm(MainWindow):
     # ------------------------------------------------------------------
 
     def _build_chrome(self) -> None:
-        self.attach_html("mainwindow_header", self._toolbar_html())
+        self._toolbar = self.add_toolbar("mainwindow_header", self._toolbar_config())
+        self._toolbar.on_click(self._on_toolbar_click)
         self._wire_toolbar()
 
         body = self.add_layout(
@@ -315,64 +323,51 @@ class IguanaXterm(MainWindow):
         # tab, so it comes back on its own when the last tab is closed. The pane
         # and SFTP rules go up once here rather than with every pane built.
         hint = js.document.createElement("style")
-        hint.textContent = _WORKSPACE_CSS + _GRID_CSS + _PANE_CSS + _SFTP_CSS
+        hint.textContent = _WORKSPACE_CSS + _GRID_CSS + _PANE_CSS + _SFTP_CSS + _ABOUT_CSS
         js.document.head.appendChild(hint)
 
-    def _toolbar_html(self) -> str:
-        parts = ['<div class="ix-toolbar">']
+    def _toolbar_config(self) -> ToolbarConfig:
+        items: list = []
         for key, label, icon in _TOOLBAR_BUTTONS:
-            if key == "|":
-                parts.append('<span class="ix-toolbar-sep"></span>')
-                continue
-            parts.append(
-                f'<button type="button" class="ix-toolbar-btn" data-action="{key}">'
-                f'<span class="mdi {icon}"></span><span>{label}</span></button>'
-            )
-        parts.append('<span class="ix-toolbar-spacer"></span>')
-        # Shown only while restored panes are waiting to be dialled.
-        parts.append(
-            '<button type="button" class="ix-toolbar-btn ix-reconnect-all" '
-            'data-action="reconnect_all" hidden '
-            'title="Dial every restored connection, one after another">'
-            '<span class="mdi mdi-connection"></span>'
-            '<span class="ix-reconnect-all-label">Reconnect all</span></button>'
-        )
-        parts.append(
-            '<span class="ix-mode-switch" role="group" aria-label="Workspace layout">'
-            '<button type="button" class="ix-mode-btn" data-mode="tabbed" '
-            'aria-selected="true" title="One connection at a time, in tabs">'
-            '<span class="mdi mdi-table-row"></span></button>'
-            '<button type="button" class="ix-mode-btn" data-mode="tiled" '
-            'aria-selected="false" title="Tile connections in a resizable grid">'
-            '<span class="mdi mdi-view-grid"></span></button>'
-            '</span>'
-        )
-        # Shown by _check_release when a newer release is out; opens About.
-        parts.append(
-            '<button type="button" class="ix-update" data-action="about" id="ix-update" hidden>'
-            '<span class="mdi mdi-arrow-up-circle"></span><span id="ix-update-text"></span></button>'
-        )
-        parts.append('<span class="ix-toolbar-user" id="ix-user"></span>')
-        parts.append(
-            '<button type="button" class="ix-toolbar-btn" data-action="logout" '
-            'title="Sign out">'
-            '<span class="mdi mdi-logout"></span><span>Logout</span></button>'
-        )
-        parts.append("</div>")
-        parts.append(f"<style>{_TOOLBAR_CSS}</style>")
-        return "".join(parts)
+            items.append(ToolbarSeparator() if key == "|" else ToolbarButton(key, label, icon))
+        items += [
+            ToolbarSpacer(),
+            # Shown only while restored panes are waiting to be dialled
+            # (_sync_reconnect_all), and relabelled with its progress.
+            ToolbarButton(
+                "reconnect_all", "Reconnect all", "mdi-connection", variant="primary",
+                hidden=True, keep_label=True,
+                tooltip="Dial every restored connection, one after another",
+            ),
+            ToolbarButton("tabbed", "Tabs", "mdi-table-row", group="mode", active=True,
+                          show_label=False, tooltip="One connection at a time, in tabs"),
+            ToolbarButton("tiled", "Tiles", "mdi-view-grid", group="mode",
+                          show_label=False, tooltip="Tile connections in a resizable grid"),
+            ToolbarSeparator(),
+            # Shown by _check_release when a newer release is out; opens About.
+            ToolbarButton("update", "Update", "mdi-arrow-up-circle", variant="accent", hidden=True),
+            ToolbarText("user"),
+            ToolbarButton("logout", "Logout", "mdi-logout", tooltip="Sign out"),
+        ]
+        return ToolbarConfig(items=items, label="IguanaXterm")
+
+    def _on_toolbar_click(self, payload: dict) -> None:
+        item = payload.get("id")
+        if payload.get("group") == "mode":
+            self._set_mode(item)
+        elif item == "update":
+            self._on_toolbar("about")
+        else:
+            self._on_toolbar(item)
 
     def _wire_toolbar(self) -> None:
         def _on_click(event) -> None:
             # A DOM miss arrives as JsNull, not None: `x is None` is always
             # False for it and the next attribute access raises. JsNull is
             # falsy, so test truthiness for anything coming back over the FFI.
-            button = event.target.closest(".ix-toolbar-btn")
-            if button:
-                self._on_toolbar(button.dataset.action)
-                return
-            # One delegated listener covers the per-tab SFTP toolbars too, so
-            # each new tab does not add another document-level handler.
+            # The header toolbar is a wapyt Toolbar with its own on_click; this
+            # one delegated listener covers the per-tab SFTP toolbars and the
+            # pane chrome, so each new tab does not add a document-level handler.
             sftp_button = event.target.closest("[data-sftp]")
             if sftp_button:
                 self._sftp_click(sftp_button.dataset.sftp, sftp_button.dataset.tab)
@@ -413,11 +408,6 @@ class IguanaXterm(MainWindow):
             reconnect = event.target.closest("[data-reconnect]")
             if reconnect:
                 self._connect_pane(reconnect.dataset.reconnect)
-                return
-
-            mode_button = event.target.closest("[data-mode]")
-            if mode_button:
-                self._set_mode(mode_button.dataset.mode)
 
         self._toolbar_proxy = create_proxy(_on_click)
         js.document.addEventListener("click", self._toolbar_proxy)
@@ -444,10 +434,8 @@ class IguanaXterm(MainWindow):
 
     async def _load_identity(self) -> None:
         self._me = await UserService().me_async()
-        label = js.document.getElementById("ix-user")
-        if label:  # JsNull, not None, when absent
-            suffix = " · admin" if self._me.get("is_admin") else ""
-            label.textContent = f"{self._me.get('username', '')}{suffix}"
+        suffix = " · admin" if self._me.get("is_admin") else ""
+        self._toolbar.set_text("user", f"{self._me.get('username', '')}{suffix}")
         if self._me.get("must_change_password"):
             self._password_nag()
 
@@ -464,11 +452,10 @@ class IguanaXterm(MainWindow):
         result = await AboutService().latest_async()
         self._release = dict(result) if result.get("ok") else {
             "checked": False, "reason": "unreachable", "error": result.get("error", "")}
-        badge = js.document.getElementById("ix-update")
-        if badge and self._release.get("newer"):
-            js.document.getElementById("ix-update-text").textContent = f"Update {self._release['latest']}"
-            badge.title = f"IguanaXterm {self._release['latest']} is out — see About"
-            badge.hidden = False
+        if self._release.get("newer"):
+            self._toolbar.set_text("update", f"Update {self._release['latest']}")
+            self._toolbar.set_tooltip("update", f"IguanaXterm {self._release['latest']} is out — see About")
+            self._toolbar.set_hidden("update", False)
         status = js.document.getElementById("ix-about-update")
         if status:
             status.innerHTML = self._release_html()
@@ -1361,6 +1348,8 @@ class IguanaXterm(MainWindow):
 
     async def _go_tiled(self) -> None:
         if not await self._ensure_gridstack():
+            # The Toolbar pressed "tiled" on click; put it back.
+            self._sync_mode_buttons()
             return
         if self._mode == "tiled":
             return
@@ -1624,21 +1613,17 @@ class IguanaXterm(MainWindow):
         return [pane_id for pane_id, pane in self._panes.items() if not pane["dialled"]]
 
     def _sync_reconnect_all(self) -> None:
-        button = js.document.querySelector(".ix-reconnect-all")
-        if not button:
+        if self._toolbar is None:
             return
         waiting = len(self._waiting_panes())
-        button.hidden = not (waiting or self._reconnecting_all)
-        button.disabled = self._reconnecting_all
-        label = button.querySelector(".ix-reconnect-all-label")
-        if label:
-            # Every dial re-syncs the button too, so the progress text lives in
-            # state rather than being passed in, or the first dial clobbers it.
-            label.textContent = (
-                self._reconnect_progress
-                if self._reconnecting_all
-                else f"Reconnect all ({waiting})"
-            )
+        # Every dial re-syncs the button too, so the progress text lives in
+        # state rather than being passed in, or the first dial clobbers it.
+        self._toolbar.set_text(
+            "reconnect_all",
+            self._reconnect_progress if self._reconnecting_all else f"Reconnect all ({waiting})",
+        )
+        self._toolbar.set_disabled("reconnect_all", self._reconnecting_all)
+        self._toolbar.set_hidden("reconnect_all", not (waiting or self._reconnecting_all))
 
     def _settle(self, pane_id: str) -> None:
         pane = self._panes.get(pane_id)
@@ -1683,12 +1668,8 @@ class IguanaXterm(MainWindow):
             self._sync_reconnect_all()
 
     def _sync_mode_buttons(self) -> None:
-        for mode in ("tiled", "tabbed"):
-            button = js.document.querySelector(f'[data-mode="{mode}"]')
-            if button:
-                button.setAttribute(
-                    "aria-selected", "true" if mode == self._mode else "false"
-                )
+        if self._toolbar is not None:
+            self._toolbar.set_active(self._mode)
 
     # ------------------------------------------------------------------
     # SFTP
@@ -2985,27 +2966,7 @@ _WORKSPACE_CSS = """
 .wapyt-tabwidget-tabs:empty{display:none;}
 """
 
-_TOOLBAR_CSS = """
-.ix-toolbar{display:flex;align-items:center;gap:4px;padding:6px 10px;height:100%;
-  background:#111827;border-bottom:1px solid #1f2937;font:13px system-ui,sans-serif;}
-.ix-toolbar-btn{display:inline-flex;align-items:center;gap:6px;padding:6px 11px;
-  color:#cbd5f5;background:transparent;border:1px solid transparent;border-radius:6px;
-  cursor:pointer;font:inherit;}
-.ix-toolbar-btn:hover{background:#1f2937;border-color:#334155;}
-.ix-toolbar-btn .mdi{font-size:16px;}
-.ix-reconnect-all{margin-right:10px;color:#e2e8f0;background:#1e3a5f;
-  border-color:#2563eb;}
-.ix-reconnect-all:hover{background:#1e40af;border-color:#3b82f6;}
-.ix-reconnect-all:disabled{opacity:.7;cursor:progress;}
-.ix-reconnect-all[hidden]{display:none;}
-.ix-toolbar-sep{width:1px;height:20px;margin:0 6px;background:#334155;}
-.ix-toolbar-spacer{flex:1 1 auto;}
-.ix-toolbar-user{color:#64748b;font-size:12px;padding-right:6px;}
-.ix-update{display:inline-flex;align-items:center;gap:5px;margin-right:8px;padding:4px 10px;
-  border-radius:999px;border:1px solid rgba(16,185,129,.45);background:rgba(16,185,129,.12);
-  color:#6ee7b7;font:600 12px system-ui,sans-serif;cursor:pointer;}
-.ix-update[hidden]{display:none;}
-.ix-update:hover{background:rgba(16,185,129,.22);}
+_ABOUT_CSS = """
 .ix-about{display:flex;flex-direction:column;gap:14px;padding:4px 2px;font:13px/1.5 system-ui,sans-serif;color:#cbd5f5;}
 .ix-about-head{display:flex;align-items:center;gap:14px;}
 .ix-about-logo{width:56px;height:56px;border-radius:50%;}
@@ -3095,13 +3056,6 @@ _GRID_CSS = """
   padding:7px 15px;color:#e2e8f0;background:#1e293b;border:1px solid #334155;
   border-radius:7px;cursor:pointer;font:13px system-ui,sans-serif;}
 .ix-reconnect-btn:hover{background:#334155;border-color:#475569;}
-.ix-mode-switch{display:inline-flex;gap:2px;margin-right:10px;padding:2px;
-  background:#0b1220;border:1px solid #1f2937;border-radius:7px;}
-.ix-mode-btn{display:inline-flex;align-items:center;justify-content:center;
-  width:28px;height:24px;padding:0;color:#64748b;background:transparent;
-  border:none;border-radius:5px;cursor:pointer;font-size:15px;}
-.ix-mode-btn:hover{color:#cbd5f5;background:#1f2937;}
-.ix-mode-btn[aria-selected="true"]{color:#e2e8f0;background:#1e293b;}
 """
 
 _PANE_CSS = """

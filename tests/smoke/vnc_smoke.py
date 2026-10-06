@@ -60,7 +60,7 @@ def close(a, b, slack=12):
 
 
 def new_profile(page, name, kind, host, port, password="", via=None, username=""):
-    page.click('.ix-toolbar-btn[data-action="new"]')
+    page.click('.wapyt-toolbar-btn[data-id="new"]')
     form = page.locator(".wapyt-modal-body:visible .wapyt-form-body")
     form.wait_for(timeout=30000)
     form.locator('[name="session_type"]').select_option(kind)

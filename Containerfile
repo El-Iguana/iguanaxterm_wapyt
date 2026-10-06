@@ -26,7 +26,7 @@ ARG PYTHON_IMAGE=docker.io/library/python:3.13-slim
 FROM ${PYTHON_IMAGE} AS wapyt-git
 ARG WAPYT_REPO=https://github.com/WAwesome-AI/wa_pytincture_widgetset.git
 # The commit IguanaXterm was verified against. Bump deliberately.
-ARG WAPYT_REF=b7f65a6b833d8dae6de26846038dfbd94e3da0b3
+ARG WAPYT_REF=b8275a830eaa990fab31c9084a28111e6ba47ff8
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 RUN git clone --filter=blob:none "$WAPYT_REPO" /src \

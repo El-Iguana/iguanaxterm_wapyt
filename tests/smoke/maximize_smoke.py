@@ -44,12 +44,12 @@ with sync_playwright() as p:
         pg.fill('input[name="email"]', "admin")
         pg.fill('input[name="password"]', "testpass123")
         pg.click('input[type="submit"]')
-    pg.wait_for_selector(".ix-toolbar", timeout=180000)
+    pg.wait_for_selector(".wapyt-toolbar", timeout=180000)
     reset_workspace(pg)
     pg.wait_for_timeout(400)
 
     if pg.locator(".wapyt-tree-row").count() == 0:
-        pg.click('.ix-toolbar-btn[data-action="new"]')
+        pg.click('.wapyt-toolbar-btn[data-id="new"]')
         pg.wait_for_selector(".wapyt-modal-body .wapyt-form-body", timeout=30000)
         for name, val in (("name", "alpine-box"), ("host", "127.0.0.1"),
                           ("port", "2222"), ("username", "testuser"),
@@ -63,7 +63,7 @@ with sync_playwright() as p:
     first = new_pane(pg, leaf); pg.wait_for_timeout(2000)
     second = new_pane(pg, leaf); pg.wait_for_timeout(2000)
 
-    pg.click('.ix-mode-btn[data-mode="tiled"]')
+    pg.click('.wapyt-toolbar-btn[data-group="mode"][data-id="tiled"]')
     pg.wait_for_selector("#ix-grid-host .grid-stack-item", timeout=30000)
     pg.wait_for_timeout(1500)
 
@@ -183,8 +183,8 @@ with sync_playwright() as p:
 
     # ── switching to tabbed clears it ───────────────────────────────────────
     pg.click(f'[data-pane-max="{first}"]'); pg.wait_for_timeout(700)
-    pg.click('.ix-mode-btn[data-mode="tabbed"]'); pg.wait_for_timeout(1000)
-    pg.click('.ix-mode-btn[data-mode="tiled"]'); pg.wait_for_timeout(1500)
+    pg.click('.wapyt-toolbar-btn[data-group="mode"][data-id="tabbed"]'); pg.wait_for_timeout(1000)
+    pg.click('.wapyt-toolbar-btn[data-group="mode"][data-id="tiled"]'); pg.wait_for_timeout(1500)
     back = pg.evaluate("""() => [...document.querySelectorAll(
       '#ix-grid-host .grid-stack-item')].filter(i => i.dataset.maximized).length""")
     check(back == 0, "a round trip through tabbed clears the maximize", f"{back}")

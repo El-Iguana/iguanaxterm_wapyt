@@ -45,7 +45,7 @@ def main() -> int:
             page.click('input[type="submit"]')
             page.wait_for_load_state("domcontentloaded")
 
-        page.wait_for_selector(".ix-toolbar", timeout=180000)
+        page.wait_for_selector(".wapyt-toolbar", timeout=180000)
         reset_workspace(page)
         page.wait_for_selector(".wapyt-tree-row", timeout=30000)
 
@@ -110,7 +110,7 @@ def main() -> int:
         page.screenshot(path="/tmp/ix_smoke_term.png")
 
         # ── SFTP ─────────────────────────────────────────────────────────────
-        page.click('.ix-toolbar-btn[data-action="sftp"]')
+        page.click('.wapyt-toolbar-btn[data-id="sftp"]')
         check(page.wait_for_selector(".wapyt-datatable-table tbody tr", timeout=30000) is not None,
               "SFTP tab lists the remote home directory")
 

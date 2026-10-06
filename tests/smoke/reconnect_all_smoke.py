@@ -66,7 +66,7 @@ def leaf(page, name):
 
 def button_state(page):
     return page.evaluate("""() => {
-      const b = document.querySelector('.ix-reconnect-all');
+      const b = document.querySelector('.wapyt-toolbar-btn[data-id="reconnect_all"]');
       return {hidden: b.hidden, disabled: b.disabled, text: b.innerText.trim()};
     }""")
 
@@ -84,13 +84,13 @@ with sync_playwright() as p:
         page.fill('input[name="email"]', "admin")
         page.fill('input[name="password"]', "testpass123")
         page.click('input[type="submit"]')
-    page.wait_for_selector(".ix-toolbar", timeout=180000)
+    page.wait_for_selector(".wapyt-toolbar", timeout=180000)
     reset_workspace(page)
 
     for name, (kind, port) in PROFILES.items():
         if leaf(page, name).count():
             continue
-        page.click('.ix-toolbar-btn[data-action="new"]')
+        page.click('.wapyt-toolbar-btn[data-id="new"]')
         form = page.locator(".wapyt-modal-body:visible .wapyt-form-body")
         form.wait_for(timeout=30000)
         form.locator('[name="session_type"]').select_option(kind)
@@ -113,7 +113,7 @@ with sync_playwright() as p:
     check(button_state(page)["hidden"], "hidden while every pane is live")
     # Tiled, so every restored pane (and its Reconnect button) is on screen;
     # in tabbed mode only the active tab's is.
-    page.click('.ix-mode-btn[data-mode="tiled"]')
+    page.click('.wapyt-toolbar-btn[data-group="mode"][data-id="tiled"]')
     page.wait_for_selector("#ix-grid-host .grid-stack-item", timeout=30000)
     page.wait_for_timeout(1500)  # the debounced layout save
 
@@ -135,14 +135,14 @@ with sync_playwright() as p:
           "a hand reconnect comes off the count", button_state(page)["text"])
 
     # ── reconnect the rest ───────────────────────────────────────────────────
-    page.click(".ix-reconnect-all")
+    page.click('.wapyt-toolbar-btn[data-id="reconnect_all"]')
     page.wait_for_timeout(200)
     during = button_state(page)
     check(during["disabled"] and during["text"].startswith("Reconnecting"),
           "button shows progress and cannot be pressed twice", str(during))
 
     page.wait_for_function(
-        "() => document.querySelector('.ix-reconnect-all').hidden", timeout=90000
+        "() => document.querySelector('.wapyt-toolbar-btn[data-id=reconnect_all]').hidden", timeout=90000
     )
     dials = page.evaluate("window.__dials")[1:]  # the hand-dialled one is first
     check(len(dials) == 2 and all(d["connected"] for d in dials),

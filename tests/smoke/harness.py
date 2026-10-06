@@ -19,7 +19,7 @@ def dismiss_password_nag(page, timeout_ms: int = 60000) -> bool:
     rather than for a fixed time: the identity call can be slow on a cold load.
     """
     page.wait_for_function(
-        "() => (document.getElementById('ix-user')?.textContent || '').trim() !== ''",
+        "() => (document.querySelector('.wapyt-toolbar-text')?.textContent || '').trim() !== ''",
         timeout=timeout_ms,
     )
     later = page.locator('[data-nag="later"]')
@@ -40,7 +40,7 @@ def reset_workspace(page, timeout_ms: int = 30000) -> int:
     save so the next reload starts clean too.
     """
     dismiss_password_nag(page)
-    tabbed = page.locator('.ix-mode-btn[data-mode="tabbed"]')
+    tabbed = page.locator('.wapyt-toolbar-btn[data-group="mode"][data-id="tabbed"]')
     if tabbed.count():
         tabbed.click()
         page.wait_for_timeout(400)
@@ -64,7 +64,7 @@ def reset_workspace(page, timeout_ms: int = 30000) -> int:
         # would be pane_3 and every test that names pane_1 would miss. The
         # layout is empty now, so a reload starts the counter clean.
         page.reload(wait_until="domcontentloaded")
-        page.wait_for_selector(".ix-toolbar", timeout=180000)
+        page.wait_for_selector(".wapyt-toolbar", timeout=180000)
         dismiss_password_nag(page)  # a reload shows it again
         page.wait_for_timeout(800)
     return closed

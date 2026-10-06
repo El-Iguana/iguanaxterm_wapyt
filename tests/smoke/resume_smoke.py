@@ -102,11 +102,11 @@ with sync_playwright() as p:
         page.fill('input[name="email"]', "admin")
         page.fill('input[name="password"]', "testpass123")
         page.click('input[type="submit"]')
-    page.wait_for_selector(".ix-toolbar", timeout=180000)
+    page.wait_for_selector(".wapyt-toolbar", timeout=180000)
     reset_workspace(page)
 
     if not session_leaf(page).count():
-        page.click('.ix-toolbar-btn[data-action="new"]')
+        page.click('.wapyt-toolbar-btn[data-id="new"]')
         form = page.locator(".wapyt-modal-body:visible .wapyt-form-body")
         form.wait_for(timeout=30000)
         form.locator('[name="name"]').fill("alpine-box")
@@ -117,7 +117,7 @@ with sync_playwright() as p:
         page.locator(".wapyt-modal-body:visible .wapyt-form-button-primary").click()
         page.wait_for_timeout(1500)
     session_leaf(page).click()
-    page.click('.ix-toolbar-btn[data-action="sftp"]')
+    page.click('.wapyt-toolbar-btn[data-id="sftp"]')
     page.wait_for_selector(".wapyt-datatable-table tbody tr", timeout=30000)
     page.click('.ix-sftp-btn[data-sftp="refresh"]')
     page.wait_for_function("""() => [...document.querySelectorAll('.wapyt-datatable-table tbody tr')]

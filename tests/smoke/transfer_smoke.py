@@ -11,7 +11,7 @@ from playwright.sync_api import sync_playwright
 
 import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-from harness import reset_workspace, session_leaf  # noqa: E402
+from harness import reset_workspace, session_leaf, record_toasts, toast_text  # noqa: E402
 
 
 BASE = "http://127.0.0.1:8799"
@@ -134,6 +134,7 @@ def main() -> int:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
         page = browser.new_page(viewport={"width": 1500, "height": 950})
+        record_toasts(page)
         page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.add_init_script(PICKER_STUB)
@@ -169,7 +170,7 @@ def main() -> int:
         check(page.locator(".ix-queue-row").count() == 1, "queue row created")
         check(page.locator('.ix-queue-row[data-state="done"]').count() == 1,
               "queue row marked done",
-              page.locator(".ix-queue-status").first.inner_text())
+              page.locator(".wapyt-progress-value").first.inner_text())
 
         # ── multi-select download → folder picker, tree recreated ────────────
         page.evaluate("() => { window.__saved = {}; }")
@@ -211,7 +212,7 @@ def main() -> int:
         # download met it: it must have become "readme (2).txt".
         check("/dest/readme (2).txt" in paths and "/dest/logs/app.log" in paths,
               "an existing file is kept; the new one is numbered", str(paths))
-        toast = page.inner_text("#ix-toast")
+        toast = toast_text(page)
         check("“readme.txt” as “readme (2).txt”" in toast, "and the toast says so", repr(toast))
 
         # The same selection again: now both the file and the folder clash.
@@ -227,8 +228,8 @@ def main() -> int:
         writes = page.evaluate("() => window.__writes")
         check(all(count == 1 for count in writes.values()),
               "no path was ever written twice", str(writes))
-        check("2 items were already there" in page.inner_text("#ix-toast"),
-              "and the toast counts them", repr(page.inner_text("#ix-toast")))
+        check("2 items were already there" in toast_text(page),
+              "and the toast counts them", repr(toast_text(page)))
 
         # ── upload ──────────────────────────────────────────────────────────
         page.click(".ix-queue-clear")

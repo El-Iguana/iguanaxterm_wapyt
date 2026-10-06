@@ -19,7 +19,7 @@ from playwright.sync_api import sync_playwright
 
 import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-from harness import new_pane, reset_workspace, session_leaf  # noqa: E402
+from harness import new_pane, reset_workspace, session_leaf, record_toasts, toast_text  # noqa: E402
 from transfer_smoke import login  # noqa: E402
 
 results = []
@@ -54,6 +54,7 @@ with sync_playwright() as p:
     context = browser.new_context(viewport={"width": 1400, "height": 900},
                                   permissions=["clipboard-read", "clipboard-write"])
     page = context.new_page()
+    record_toasts(page)
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
@@ -83,8 +84,8 @@ with sync_playwright() as p:
     copied = clipboard(page)
     check("COPY_CTRL_C_ABC" in copied, "Ctrl+C with a selection copies it", repr(copied[:60]))
     check(rows(page, pane).count("^C") == before, "and sends no interrupt to the remote")
-    check(re.search(r"Copied \d+ characters", page.inner_text("#ix-toast") or ""),
-          "and says so", repr(page.inner_text("#ix-toast")))
+    check(re.search(r"Copied \d+ characters", toast_text(page) or ""),
+          "and says so", repr(toast_text(page)))
 
     # ── Ctrl+C without a selection is still the interrupt ───────────────────
     page.click(screen)
@@ -141,13 +142,14 @@ with sync_playwright() as p:
     # ── a browser that will not hand over the clipboard ─────────────────────
     strict = browser.new_context(viewport={"width": 1400, "height": 900})
     page = strict.new_page()
+    record_toasts(page)
     login(page)
     pane = new_pane(page, session_leaf(page))
     page.wait_for_timeout(2000)
     page.click(f"#pane-term-{pane} .xterm-screen", button="right")
     page.locator(".wapyt-terminal-menu-item[data-action='paste']").dispatch_event("mousedown")
     page.wait_for_timeout(800)
-    toast = page.inner_text("#ix-toast")
+    toast = toast_text(page)
     check("Use Ctrl+V instead" in toast, "a refused clipboard read is explained", repr(toast))
     reset_workspace(page)
     browser.close()

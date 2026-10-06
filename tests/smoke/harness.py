@@ -96,3 +96,28 @@ def session_leaf(page, name: str = "alpine-box"):
             branch.click()
             page.wait_for_timeout(150)
     return page.locator(f".wapyt-tree-row[data-node-id^='sess_']:has-text('{name}')").first
+
+
+# wapyt toasts leave the DOM after ~4s, and these scripts often look a few
+# seconds after the action. Record every toast as it appears instead.
+TOAST_RECORDER = """
+window.__toasts = [];
+new MutationObserver((records) => {
+  for (const r of records) for (const n of r.addedNodes) {
+    if (n.nodeType === 1 && n.classList.contains('wapyt-toast')) {
+      const t = n.querySelector('.wapyt-toast-text');
+      if (t) window.__toasts.push(t.textContent);
+    }
+  }
+}).observe(document, {childList: true, subtree: true});
+"""
+
+
+def record_toasts(page_or_context) -> None:
+    """Install the toast recorder on a page or context (before navigating)."""
+    page_or_context.add_init_script(TOAST_RECORDER)
+
+
+def toast_text(page) -> str:
+    """Every toast shown on this page so far, newest last, one per line."""
+    return page.evaluate("() => (window.__toasts || []).join('\\n')")

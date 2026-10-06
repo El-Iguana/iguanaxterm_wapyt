@@ -69,7 +69,7 @@ def saved_sha(page, name):
 
 def queue_row(page):
     return page.evaluate("""() => { const r = [...document.querySelectorAll('.ix-queue-row')].pop();
-        return r ? {state: r.dataset.state || '', status: r.querySelector('.ix-queue-status').innerText,
+        return r ? {state: r.dataset.state || '', status: r.querySelector('.wapyt-progress-value').innerText,
                     resume: !!r.querySelector('.ix-queue-resume')} : null; }""")
 
 

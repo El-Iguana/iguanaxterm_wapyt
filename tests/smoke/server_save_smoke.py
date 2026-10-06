@@ -25,7 +25,7 @@ from playwright.sync_api import sync_playwright
 
 import sys as _sys
 _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import reset_workspace, session_leaf  # noqa: E402
+from harness import reset_workspace, session_leaf, record_toasts, toast_text  # noqa: E402
 from transfer_smoke import login, row_for  # noqa: E402
 
 DOWNLOADS = Path(os.environ.get("GANXTERM_DOWNLOAD_DIR", "/tmp/ixdl")) / "admin"
@@ -58,6 +58,7 @@ with sync_playwright() as p:
     context = browser.new_context(viewport={"width": 1500, "height": 950}, accept_downloads=True)
     context.add_init_script(NO_PICKERS)
     page = context.new_page()
+    record_toasts(page)
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
@@ -100,13 +101,13 @@ with sync_playwright() as p:
 
     page.wait_for_selector(".ix-queue-row[data-state]", timeout=60000)
     queue = page.evaluate("""() => [...document.querySelectorAll('.ix-queue-row')].map(r => ({
-        name: r.querySelector('.ix-queue-name').innerText,
+        name: r.querySelector('.wapyt-progress-label').innerText,
         state: r.dataset.state || '',
-        status: r.querySelector('.ix-queue-status').innerText}))""")
+        status: r.querySelector('.wapyt-progress-value').innerText}))""")
     check(queue and queue[-1]["name"] == "savetest → server" and queue[-1]["state"] == "done"
           and str(DOWNLOADS / "savetest") in queue[-1]["status"],
           "queue row finished, naming where on disk", str(queue[-1] if queue else queue))
-    toast = page.inner_text("#ix-toast")
+    toast = toast_text(page)
     check(str(DOWNLOADS / "savetest") in toast and "4 file(s)" in toast,
           "toast names the folder on disk it went to", repr(toast))
 
@@ -157,6 +158,7 @@ with sync_playwright() as p:
     brave.add_init_script(NO_PICKERS)
     brave.add_init_script("navigator.brave = {isBrave: () => Promise.resolve(true)};")
     page = brave.new_page()
+    record_toasts(page)
     login(page)
     session_leaf(page).click()
     page.click('.wapyt-toolbar-btn[data-id="sftp"]')

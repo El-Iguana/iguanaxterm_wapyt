@@ -16,7 +16,9 @@ shared with Monguana's phase 40).
 
 Siblings under `~/Development/Pytinc/`, each with its own `CLAUDE.md`:
 
-- `pytincture/` — the framework (pinned to tag `v1.0.0rc10`).
+- `pytincture/` — the framework, pinned to commit `c026333` (1.0.0rc13, not yet
+  tagged) in `pyproject.toml` *and* `requirements.txt`; swap both to tag
+  `v1.0.0rc13` once it exists.
 - `wa_pytincture_widgetset/` — **wapyt**, the widgetset. This app added four
   widgets to it: `Terminal`, `Form`, `DataTable`, `Tree`.
 - `iguanaxterm_pyt/` — the abandoned dhxpyt attempt. Reference only.
@@ -31,7 +33,6 @@ local checkout is behind `origin/main`, so read the remote if you need it.
 
 ```
 service.py              # ASGI entrypoint: config, hooks, routers, static mount
-pytincture_compat.py    # pytincture workarounds per platform (Windows: see below)
 appcode/                # pytincture modules_path
   iguanaxterm.py        #   browser UI (Pyodide). APP_ENTRYPOINT lives here.
   services/
@@ -119,17 +120,32 @@ no widgets load.
 
 ## Things that will bite
 
-### pytincture's service worker is turned off
+### The page lives at `/iguanaxterm/` (pytincture rc12+)
 
-Its scope is `/iguanaxterm/` but the page is `/iguanaxterm`, so the worker
-never controls the page, caches nothing, and the loader waited out a 5 s
-timeout for it on every load (7.2 s → 2.0 s without it).
-`pytincture_compat.apply_to_app` serves the page with
-`enableServiceWorker: false`. It has to patch the backend `create_app()`
-returns: `create_app` loads a private copy of `pytincture.backend.app`, so
-patching the imported module does nothing. When pytincture stops hard-coding
-the worker on, `test_the_template_still_needs_the_patch` fails; drop the
-patch then. Same patch in Monguana.
+`/iguanaxterm` redirects to `/iguanaxterm/` so pytincture's service worker
+(scope `/iguanaxterm/`) controls the page; before rc12 it never did, and every
+load waited out a 5 s timeout for it, which `pytincture_compat.py` used to
+patch away. Relative URLs now resolve under `/iguanaxterm/`, so the app uses
+absolute ones (`/static/…`, `/ws/…`, `/files/…`, `/gridstack/…`, `/novnc/…`).
+Keep it that way. `PytinctureConfig(enable_service_worker=False)` is the
+supported opt-out if the worker ever needs to go.
+
+### Cookie names (`cookie_namespace`, pytincture rc13+) — still the default
+
+`service.COOKIE_NAMESPACE` feeds `PytinctureConfig(cookie_namespace=...)`;
+session and CSRF cookies are `<ns>-dev-*` on loopback HTTP and `__Host-<ns>-*`
+over HTTPS. It is **`"pytincture"`, the default**, for now: switching to
+`"iguanaxterm"` (so another pytincture app on the host cannot sign this one
+out) breaks every upload, because wapyt's `filetransfer.js` only sends
+`X-CSRF-Token` for cookies named `pytincture*` and `transfer._require_csrf`
+then answers 403. Seen in `transfer_smoke` with the namespace on: downloads
+fine, upload 403. Once wapyt matches pytincture's `<ns>-csrf` shapes, change
+`COOKIE_NAMESPACE`, `_CSRF_COOKIES` in appcode (a test keeps the two in step)
+and the regex in `tests/smoke/large_upload_smoke.py`. The WebSocket and file
+routes read the session through pytincture's middleware (`request.session` /
+`websocket.session`), so they follow the namespace by themselves; the
+browser's `_csrf_token()` matches `_CSRF_COOKIES` exactly, since another app's
+CSRF cookie on the same host would otherwise be picked up.
 
 ### `APP_ENTRYPOINT` is mandatory
 
@@ -537,13 +553,14 @@ as `app\iguanaxterm_launcher.py`) runs the server on 127.0.0.3
 `%LOCALAPPDATA%\IguanaXterm`. Its own loopback address because cookies are
 per host, not per port, and pytincture hard-codes the session cookie name:
 next to Monguana (127.0.0.2) or any other pytincture app on 127.0.0.1, each
-sign-in clobbered the other's. Drop it once pytincture/pytincture#375 lets an
-app name its cookie.
+sign-in clobbered the other's. pytincture rc13's `cookie_namespace` fixes
+that at the source; drop the separate address once the namespace is switched
+on (see "Cookie names" above).
 
-- **`pytincture_compat.py`** works around pytincture being unable to read any
-  contained file on Windows (it opens a *directory* with `os.open()`); the
-  upstream fix is parked on pytincture branch `fix/windows-contained-file-open`.
-  Drop the patch once a pytincture release has it.
+- **Contained file reads on Windows** (pytincture opened a *directory* with
+  `os.open()`) were patched by `pytincture_compat.py` until pytincture#377;
+  rc13 has the fix. `tests/test_pytincture_platform.py` simulates Windows'
+  missing `dir_fd` so a regression would fail here.
 - **MIME types are pinned** in `service.register_mime_types()`: Windows'
   registry often maps `.js` to `text/plain`, and noVNC's ES modules are
   refused outright with the wrong type.

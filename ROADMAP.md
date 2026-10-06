@@ -18,8 +18,7 @@ In short:
   plain HTTP on loopback. The launcher defaults to 127.0.0.3 (its own
   cookie jar, see CLAUDE.md), which macOS does not answer without
   `ifconfig lo0 alias 127.0.0.3`: the macOS build must add the alias or set
-  `GANXTERM_HOST=127.0.0.1`. `pytincture_compat`'s Windows patch is not needed
-  on macOS; the service-worker patch applies as everywhere.
+  `GANXTERM_HOST=127.0.0.1` (safe once the cookie namespace is switched on).
 - **Apple Silicon first, unsigned.** Every compiled package in `uv.lock` (12)
   publishes macOS arm64 wheels. Intel is blocked the same way as in Monguana:
   `cryptography` 50.0.1 and `argon2-cffi-bindings` 26.1.0 publish no x86_64

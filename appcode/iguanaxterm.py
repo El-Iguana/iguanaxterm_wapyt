@@ -150,6 +150,13 @@ def _recovered(outcome) -> str:
     return ""
 
 
+# The CSRF cookie's name under service.py's cookie_namespace: __Host- over
+# HTTPS, -dev- over loopback HTTP. Matched exactly, because another pytincture
+# app on the same host has its own CSRF cookie, and sending that one fails
+# every upload.
+_CSRF_COOKIES = ("__Host-pytincture-csrf", "pytincture-dev-csrf")
+
+
 def _csrf_token() -> str:
     """
     pytincture's CSRF cookie. Readable from script on purpose — echoing it back
@@ -157,7 +164,7 @@ def _csrf_token() -> str:
     """
     for part in str(js.document.cookie).split(";"):
         name, _, value = part.strip().partition("=")
-        if "csrf" in name.lower():
+        if name in _CSRF_COOKIES:
             return str(js.decodeURIComponent(value))
     return ""
 

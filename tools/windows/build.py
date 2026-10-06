@@ -161,7 +161,7 @@ def copy_app(bundle: Path, wheel: Path) -> None:
     print("==> the app")
     app = bundle / "app"
     app.mkdir(parents=True)
-    for name in ("service.py", "pytincture_compat.py", "manage.py", "LICENSE"):
+    for name in ("service.py", "manage.py", "LICENSE"):
         shutil.copy2(ROOT / name, app / name)
     shutil.copytree(ROOT / "appcode", app / "appcode", ignore=shutil.ignore_patterns(
         "__pycache__", "*.pyc", "wapyt-*.whl"))

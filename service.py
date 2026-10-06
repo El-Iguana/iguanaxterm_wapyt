@@ -71,10 +71,6 @@ def register_mime_types() -> None:
 
 register_mime_types()
 
-import pytincture_compat  # noqa: E402
-
-pytincture_compat.apply()
-
 from pytincture import PytinctureConfig, create_app  # noqa: E402
 from pytincture.backend.middleware import RequestBodyLimitMiddleware  # noqa: E402
 
@@ -87,6 +83,12 @@ from services.downloads import router as downloads_router  # noqa: E402
 from services.vnc_ws import router as vnc_router  # noqa: E402
 
 APPLICATION = "iguanaxterm"
+# pytincture's default cookie names for now. "iguanaxterm" (own names, so
+# another pytincture app on the host cannot sign this one out) waits on wapyt:
+# filetransfer.js only sends the CSRF header for cookies named pytincture*,
+# so every upload would 403. Switch here, in _CSRF_COOKIES and in
+# tests/smoke/large_upload_smoke.py together.
+COOKIE_NAMESPACE = "pytincture"
 PORT = int(os.getenv("PORT", "8765"))
 # The address uvicorn listens on. With host networking (Linux) the container
 # would otherwise publish plain HTTP to the whole network, so
@@ -246,6 +248,10 @@ def build_app():
             default_application=APPLICATION,
             enable_user_login=True,
             enable_dev_email_login=loopback,
+            # Session/CSRF cookie names: <ns>-dev-* over loopback HTTP,
+            # __Host-<ns>-* over HTTPS. Changing it signs existing users out
+            # once. _CSRF_COOKIES in appcode must match (a test checks).
+            cookie_namespace=COOKIE_NAMESPACE,
             session_secret=session_secret(),
             allowed_hosts=allowed_hosts(),
             canonical_origin=origin,
@@ -257,7 +263,6 @@ def build_app():
         )
     )
 
-    pytincture_compat.apply_to_app(application)
     # Relabel pytincture's hardcoded email login field; see login_page.py.
     check_at_startup()
     application.add_middleware(LoginPageMiddleware)

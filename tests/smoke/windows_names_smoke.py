@@ -21,7 +21,7 @@ from playwright.sync_api import sync_playwright
 
 import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-from harness import reset_workspace, session_leaf  # noqa: E402
+from harness import reset_workspace, session_leaf, record_toasts, toast_text  # noqa: E402
 from transfer_smoke import PICKER_STUB, login, row_for  # noqa: E402
 
 results = []
@@ -78,6 +78,7 @@ with sync_playwright() as p:
 
     # ── Windows ──────────────────────────────────────────────────────────────
     page = browser.new_page(viewport={"width": 1500, "height": 950})
+    record_toasts(page)
     page.add_init_script(PICKER_STUB)
     page.add_init_script(AS_WINDOWS)
     errors = []
@@ -126,7 +127,7 @@ with sync_playwright() as p:
     check(len(dirs) == 2 and len({d.casefold() for d in dirs}) == 2,
           "Sub and sub stay two directories", str(dirs))
 
-    toast = page.inner_text("#ix-toast")
+    toast = toast_text(page)
     check("Downloaded 8 of 8" in toast and "Renamed 6" in toast,
           "one summary toast, with the rename count", repr(toast))
 
@@ -146,6 +147,7 @@ with sync_playwright() as p:
 
     # ── Linux: the same download is left alone ───────────────────────────────
     page = browser.new_page(viewport={"width": 1500, "height": 950})
+    record_toasts(page)
     page.add_init_script(PICKER_STUB)
     login(page)
     reset_workspace(page)
@@ -155,7 +157,7 @@ with sync_playwright() as p:
                                    "CON.log", "trail.", "Sub/x.txt", "sub/x.txt")}
     check(set(saved) == expected, "on Linux every name is kept exactly",
           str(sorted(set(saved) ^ expected)))
-    check("Renamed" not in page.inner_text("#ix-toast"), "and nothing claims a rename")
+    check("Renamed" not in toast_text(page), "and nothing claims a rename")
     reset_workspace(page)
     browser.close()
 

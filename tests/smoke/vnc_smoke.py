@@ -29,7 +29,7 @@ from playwright.sync_api import sync_playwright
 
 import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-from harness import reset_workspace, session_leaf  # noqa: E402
+from harness import reset_workspace, session_leaf, record_toasts, toast_text  # noqa: E402
 from transfer_smoke import login  # noqa: E402
 
 PASSWORD = "vncpass"
@@ -112,6 +112,7 @@ with sync_playwright() as p:
     context = browser.new_context(viewport={"width": 1500, "height": 950},
                                   permissions=["clipboard-read", "clipboard-write"])
     page = context.new_page()
+    record_toasts(page)
     errors, sent = [], []
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.on("console", lambda m: errors.append(m.text) if m.type == "error"
@@ -164,8 +165,8 @@ with sync_playwright() as p:
         page.wait_for_timeout(300)
         local = page.evaluate("() => navigator.clipboard.readText()")
     check(local == remote_text, "what the remote copies lands in this clipboard", repr(local))
-    check(f"Copied {len(remote_text)} characters from the desktop" in page.inner_text("#ix-toast"),
-          "and says so", repr(page.inner_text("#ix-toast")))
+    check(f"Copied {len(remote_text)} characters from the desktop" in toast_text(page),
+          "and says so", repr(toast_text(page)))
 
     # Input: click into the xterm (no window manager, so focus follows the
     # pointer) and type a command that repaints the root window.
@@ -216,7 +217,7 @@ with sync_playwright() as p:
     page.wait_for_timeout(4500)   # let the previous toast expire
     pane_b = open_desktop(page, "desk-badpw")
     page.wait_for_selector(f"#pane-term-{pane_b} .ix-reconnect-btn", timeout=30000)
-    toast = page.inner_text("#ix-toast")
+    toast = toast_text(page)
     check("rejected the password" in toast, "a wrong password is refused, with the reason",
           repr(toast))
 

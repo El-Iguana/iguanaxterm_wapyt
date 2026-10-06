@@ -489,6 +489,22 @@ second one no longer replaces the first. Never call `js.confirm()` or
 cancelled and `""` when left empty. The admin password reset prompt passes
 `password=True`, which masks it.
 
+### Transfer-queue rows use wapyt's `ProgressBar`
+
+Each queue row (`_queue_add`) is the transfer icon, a compact `ProgressBar`
+(label = the remote file name, set as text) and the cancel/resume buttons.
+`self._queue_bars[(tab_id, transfer_id)]` holds `{bar, seen, total}`:
+`_queue_progress` calls `set_value(seen, total, text="42%  1.2 MB")` (or the
+indeterminate bar with bytes moved when there is no total), `_queue_note` sets
+a readout such as "scanning… 12 file(s)" without moving the bar, and
+`_queue_finish` maps row states to bar states (`done`→done, `failed`→error,
+`paused`→paused; `cancelled` stays neutral and the row is dimmed). Rows keep
+`data-state` for the row CSS and the smoke tests; a long error is the row's
+`title`. Entries are released on "Clear finished" and when the pane closes.
+Name and readout widths are app CSS on `.ix-queue-progress`, not
+`label_width`/`value_width`, so the ≤420px container query can still narrow
+them.
+
 ### JS `null` is `JsNull`, not `None`
 
 `document.getElementById(...)` and `Element.closest(...)` return JS `null`,

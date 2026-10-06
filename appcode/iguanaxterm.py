@@ -38,6 +38,8 @@ from wapyt import (
     MainWindow,
     ModalConfig,
     ModalWindow,
+    ProgressBar,
+    ProgressBarConfig,
     SelectOption,
     TabConfig,
     TableAction,
@@ -210,6 +212,8 @@ class IguanaXterm(MainWindow):
         self._reconnect_progress = ""  # the button's label while it runs
         self._novnc_task = None         # noVNC's one-time loader, once started
         self._paused_transfers: set = set()  # downloads waiting for Resume
+        # (tab_id, transfer_id) -> {bar: wapyt ProgressBar, seen, total}
+        self._queue_bars: dict = {}
         self._saved_location = ""  # where server-side saves land, as the person sees it
         self._save_task = None
         self._grid = None          # the GridStack instance, once loaded
@@ -828,7 +832,7 @@ class IguanaXterm(MainWindow):
         terminal.on_error(lambda payload: self._toast(payload.get("message", "Error"), kind="error"))
         # Ctrl+C copies a selection now, so say so: otherwise a copy and an
         # interrupt look the same until you paste.
-        terminal.on_copy(lambda payload: self._toast(f"Copied {payload.get('chars', 0)} characters."), kind="success")
+        terminal.on_copy(lambda payload: self._toast(f"Copied {payload.get('chars', 0)} characters.", kind="success"))
         terminal.on_clipboard_error(
             lambda payload: self._toast(payload.get("message") or "Clipboard not available.", kind="error")
         )
@@ -1285,6 +1289,8 @@ class IguanaXterm(MainWindow):
         sftp = self._sftp_tabs.pop(pane_id, None)
         if sftp is not None:
             sftp["table"].destroy()
+        for key in [k for k in self._queue_bars if k[0] == pane_id]:
+            self._queue_bars.pop(key)    # their DOM goes with the pane
         observer = self._crumb_observers.pop(pane_id, None)
         if observer is not None:
             observer.disconnect()
@@ -2087,15 +2093,15 @@ class IguanaXterm(MainWindow):
             tab_id, f"{folder['name']} → server", "download", on_cancel=_cancel
         )
         progress = self._queue_progress(tab_id, transfer_id)
-        status = js.document.getElementById(f"st-{tab_id}-{transfer_id}")
+        self._queue_note(tab_id, transfer_id, "saving on the server…")
         # Say at once that this is not going where a browser download goes.
-        if status:
-            status.textContent = "saving on the server…"
-            status.title = f"Saving into {job.get('location', '')}"
+        row = js.document.getElementById(f"{tab_id}-{transfer_id}")
+        if row:
+            row.title = f"Saving into {job.get('location', '')}"
 
         while job["state"] in ("walking", "copying"):
-            if status and job["state"] == "walking":
-                status.textContent = f"scanning… {job['files_total']} file(s)"
+            if job["state"] == "walking":
+                self._queue_note(tab_id, transfer_id, f"scanning… {job['files_total']} file(s)")
             elif job["bytes_total"]:
                 progress(job["bytes_done"], job["bytes_total"])
             await asyncio.sleep(_SAVE_POLL_SECONDS)
@@ -2380,7 +2386,10 @@ class IguanaXterm(MainWindow):
     #
     # Hand-built rather than a DataTable: progress updates land several times a
     # second, and DataTable re-renders every row on set_rows, which would thrash
-    # the whole table. Here each row's own bar is mutated in place.
+    # the whole table. Here each row's own bar is mutated in place: a compact
+    # wapyt ProgressBar, whose set_value only touches the fill width and the
+    # value text. Rows keep data-state (done/failed/cancelled/paused) for the
+    # row-level CSS and the smoke tests; the bar carries the colour.
 
     def _queue_add(self, tab_id: str, label: str, kind: str, on_cancel=None) -> str:
         self._transfer_seq = getattr(self, "_transfer_seq", 0) + 1
@@ -2400,25 +2409,16 @@ class IguanaXterm(MainWindow):
         icon.className = "mdi mdi-" + ("upload" if kind == "upload" else "download")
         row.appendChild(icon)
 
-        name = js.document.createElement("span")
-        name.className = "ix-queue-name"
-        name.textContent = label          # remote-controlled: never innerHTML
-        name.title = label
-        row.appendChild(name)
-
-        track = js.document.createElement("span")
-        track.className = "ix-queue-track"
-        bar = js.document.createElement("span")
-        bar.className = "ix-queue-bar"
-        bar.id = f"bar-{tab_id}-{transfer_id}"
-        track.appendChild(bar)
-        row.appendChild(track)
-
-        status = js.document.createElement("span")
-        status.className = "ix-queue-status"
-        status.id = f"st-{tab_id}-{transfer_id}"
-        status.textContent = "starting…"
-        row.appendChild(status)
+        slot = js.document.createElement("div")
+        slot.className = "ix-queue-progress"
+        row.appendChild(slot)
+        # The label is the remote file name: ProgressBar sets it as text.
+        bar = ProgressBar(
+            ProgressBarConfig(label=label, compact=True, value_text="starting…"),
+            container=slot,
+        )
+        self._queue_bars[(tab_id, transfer_id)] = {"bar": bar, "seen": 0, "total": 0}
+        row.title = label
 
         stop = js.document.createElement("button")
         stop.type = "button"
@@ -2436,34 +2436,45 @@ class IguanaXterm(MainWindow):
 
     def _queue_progress(self, tab_id: str, transfer_id: str):
         def _update(seen: int, total: int) -> None:
-            bar = js.document.getElementById(f"bar-{tab_id}-{transfer_id}")
-            status = js.document.getElementById(f"st-{tab_id}-{transfer_id}")
+            entry = self._queue_bars.get((tab_id, transfer_id))
+            if entry is None:
+                return
+            entry["seen"], entry["total"] = seen, total
+            bar = entry["bar"]
             if total:
                 pct = max(0, min(100, int(seen * 100 / total)))
-                if bar:
-                    bar.style.width = f"{pct}%"
-                if status:
-                    status.textContent = f"{pct}%  {format_size(seen)}"
-            elif status:
+                bar.set_indeterminate(False)
+                bar.set_value(seen, total, text=f"{pct}%  {format_size(seen)}")
+            else:
                 # No Content-Length: report bytes moved instead of a percentage.
-                status.textContent = format_size(seen)
+                bar.set_indeterminate(True)
+                bar.set_value(0, text=format_size(seen))
 
         return _update
+
+    # Row states -> ProgressBar states. A cancelled row keeps the neutral bar;
+    # the row CSS dims it.
+    _BAR_STATES = {"done": "done", "failed": "error", "paused": "paused"}
 
     def _queue_finish(
         self, tab_id: str, transfer_id: str, state: str, detail: str = ""
     ) -> None:
         row = js.document.getElementById(f"{tab_id}-{transfer_id}")
-        bar = js.document.getElementById(f"bar-{tab_id}-{transfer_id}")
-        status = js.document.getElementById(f"st-{tab_id}-{transfer_id}")
         if row:
             row.dataset.state = state
-        if bar and state == "done":
-            bar.style.width = "100%"
-        if status:
-            status.textContent = detail or state
             if detail:
-                status.title = detail
+                row.title = detail        # long errors stay readable on hover
+        entry = self._queue_bars.get((tab_id, transfer_id))
+        if entry is None:
+            return
+        bar = entry["bar"]
+        bar.set_state(self._BAR_STATES.get(state, "active"))
+        bar.set_indeterminate(False)
+        if state == "done":
+            bar.set_value(1, 1, text=detail or state)
+        else:
+            # Keep the bar where it stopped; only the readout changes.
+            bar.set_value(entry["seen"], entry["total"] or 1, text=detail or state)
 
     def _queue_pause(self, tab_id: str, transfer_id: str, detail: str) -> None:
         """
@@ -2473,10 +2484,9 @@ class IguanaXterm(MainWindow):
         """
         self._paused_transfers.add(transfer_id)
         self._queue_finish(tab_id, transfer_id, "paused", "paused")
-        status = js.document.getElementById(f"st-{tab_id}-{transfer_id}")
-        if status:
-            status.title = detail
         row = js.document.getElementById(f"{tab_id}-{transfer_id}")
+        if row and detail:
+            row.title = detail
         if row and not row.querySelector(".ix-queue-resume"):
             button = js.document.createElement("button")
             button.type = "button"
@@ -2499,9 +2509,10 @@ class IguanaXterm(MainWindow):
             resume = row.querySelector(".ix-queue-resume")
             if resume:
                 resume.remove()
-        status = js.document.getElementById(f"st-{tab_id}-{transfer_id}")
-        if status:
-            status.textContent = "resuming…"
+        entry = self._queue_bars.get((tab_id, transfer_id))
+        if entry is not None:
+            entry["bar"].set_state("active")
+            entry["bar"].set_value(entry["seen"], entry["total"] or 1, text="resuming…")
         outcome = await filetransfer.resume(transfer_id, self._queue_progress(tab_id, transfer_id))
         if outcome.ok:
             self._queue_finish(tab_id, transfer_id, "done", _recovered(outcome))
@@ -2523,6 +2534,17 @@ class IguanaXterm(MainWindow):
                 resume.remove()
             self._queue_finish(tab_id, transfer_id, "cancelled")
 
+    def _queue_note(self, tab_id: str, transfer_id: str, text: str) -> None:
+        """Show a status in a row's readout without moving its bar."""
+        entry = self._queue_bars.get((tab_id, transfer_id))
+        if entry is not None:
+            entry["bar"].set_value(entry["seen"], entry["total"] or 1, text=text)
+
+    def _queue_release(self, tab_id: str, transfer_id: str) -> None:
+        entry = self._queue_bars.pop((tab_id, transfer_id), None)
+        if entry is not None:
+            entry["bar"].destroy()
+
     def _queue_clear_finished(self, tab_id: str) -> None:
         rows = js.document.getElementById(f"queue-rows-{tab_id}")
         holder = js.document.getElementById(f"queue-{tab_id}")
@@ -2530,6 +2552,7 @@ class IguanaXterm(MainWindow):
             return
         for row in list(rows.children):
             if row.dataset.state:
+                self._queue_release(tab_id, str(row.id)[len(tab_id) + 1:])
                 row.remove()
         if holder and rows.children.length == 0:
             holder.hidden = True
@@ -3139,13 +3162,14 @@ _SFTP_CSS = """
 .ix-queue-row{display:flex;align-items:center;gap:8px;padding:5px 10px;
   font:12px system-ui,sans-serif;color:#cbd5f5;}
 .ix-queue-row .mdi{font-size:14px;opacity:.7;flex:0 0 auto;}
-.ix-queue-name{flex:0 1 240px;min-width:0;overflow:hidden;text-overflow:ellipsis;
-  white-space:nowrap;}
-.ix-queue-track{flex:1 1 auto;height:5px;min-width:60px;border-radius:3px;
-  background:#1e293b;overflow:hidden;}
-.ix-queue-bar{display:block;height:100%;width:0;border-radius:3px;background:#38bdf8;
-  transition:width .15s linear;}
-.ix-queue-status{flex:0 0 auto;min-width:96px;text-align:right;color:#94a3b8;
+/* The row's wapyt ProgressBar. Widths are set here rather than with
+   label_width/value_width (inline styles), so the narrow-pane container
+   query below can still shrink them. */
+.ix-queue-progress{flex:1 1 auto;min-width:0;}
+.ix-queue-progress .wapyt-progress{color:#cbd5f5;}
+.ix-queue-progress .wapyt-progress-label{flex:0 1 240px;max-width:none;}
+.ix-queue-progress .wapyt-progress-track{min-width:60px;}
+.ix-queue-progress .wapyt-progress-value{min-width:96px;text-align:right;color:#94a3b8;
   font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .ix-queue-cancel{flex:0 0 auto;width:20px;height:20px;padding:0;color:#94a3b8;
   background:transparent;border:none;border-radius:4px;cursor:pointer;font-size:14px;}
@@ -3156,9 +3180,7 @@ _SFTP_CSS = """
 .ix-queue-resume{flex:0 0 auto;width:20px;height:20px;padding:0;color:#38bdf8;
   background:transparent;border:0;border-radius:4px;cursor:pointer;}
 .ix-queue-resume:hover{background:#1f2937;}
-.ix-queue-row[data-state="done"] .ix-queue-bar{background:#34d399;}
-.ix-queue-row[data-state="failed"] .ix-queue-bar{background:#f87171;}
-.ix-queue-row[data-state="failed"] .ix-queue-status{color:#f87171;}
+.ix-queue-row[data-state="failed"] .wapyt-progress-value{color:#f87171;}
 .ix-queue-row[data-state="cancelled"]{opacity:.55;}
 /* nowrap + scroll: wrapping turned a deep path into four stacked lines that
    ate the listing in a narrow pane. */
@@ -3201,8 +3223,8 @@ _SFTP_CSS = """
 }
 @container (max-width: 420px){
   .ix-crumb{max-width:12ch;}
-  .ix-queue-name{flex:0 1 120px;}
-  .ix-queue-status{min-width:64px;}
+  .ix-queue-progress .wapyt-progress-label{flex:0 1 120px;}
+  .ix-queue-progress .wapyt-progress-value{min-width:64px;}
 }
 """
 

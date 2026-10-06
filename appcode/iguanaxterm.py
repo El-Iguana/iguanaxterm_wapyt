@@ -25,7 +25,7 @@ import traceback
 import js
 from pyodide.ffi import create_proxy, to_js
 
-from wapyt import filetransfer
+from wapyt import filetransfer, message
 from wapyt import (
     CellConfig,
     ColumnConfig,
@@ -653,7 +653,7 @@ class IguanaXterm(MainWindow):
         elif action == "reconnect_all":
             _spawn(self._reconnect_all(), "reconnect all")
         elif self._selected_id is None:
-            self._toast("Select a session first.")
+            self._toast("Select a session first.", kind="warning")
         elif action == "edit":
             _spawn(self._session_editor(self._selected_id), "session editor")
         elif action == "delete":
@@ -677,8 +677,9 @@ class IguanaXterm(MainWindow):
         HttpOnly so the page can read it back.
         """
         open_panes = len(self._panes)
-        if open_panes and not js.confirm(
-            f"Sign out and close {open_panes} open connection(s)?"
+        if open_panes and not await message.confirm(
+            f"Sign out and close {open_panes} open connection(s)?",
+            title="Sign out", ok_text="Sign out",
         ):
             return
 
@@ -693,10 +694,10 @@ class IguanaXterm(MainWindow):
         try:
             response = await js.fetch(f"/{application}/auth/logout", options)
         except Exception:
-            self._toast("Could not sign out.")
+            self._toast("Could not sign out.", kind="error")
             return
         if not response.ok:
-            self._toast("Could not sign out.")
+            self._toast("Could not sign out.", kind="error")
             return
 
         js.window.location.assign(f"/{application}/login")
@@ -727,7 +728,7 @@ class IguanaXterm(MainWindow):
 
         caps = session_caps(session.get("type"))
         if focus == "files" and not caps["files"]:
-            self._toast("This connection has no file browser.")
+            self._toast("This connection has no file browser.", kind="warning")
             focus = "terminal"
         if focus == "terminal" and not caps["terminal"] and not caps["desktop"]:
             focus = "files"  # SFTP and FTP profiles are files only
@@ -837,12 +838,12 @@ class IguanaXterm(MainWindow):
             ),
             container=host,
         )
-        terminal.on_error(lambda payload: self._toast(payload.get("message", "Error")))
+        terminal.on_error(lambda payload: self._toast(payload.get("message", "Error"), kind="error"))
         # Ctrl+C copies a selection now, so say so: otherwise a copy and an
         # interrupt look the same until you paste.
-        terminal.on_copy(lambda payload: self._toast(f"Copied {payload.get('chars', 0)} characters."))
+        terminal.on_copy(lambda payload: self._toast(f"Copied {payload.get('chars', 0)} characters."), kind="success")
         terminal.on_clipboard_error(
-            lambda payload: self._toast(payload.get("message") or "Clipboard not available.")
+            lambda payload: self._toast(payload.get("message") or "Clipboard not available.", kind="error")
         )
         for bind in (terminal.on_connect, terminal.on_error,
                      terminal.on_disconnect, terminal.on_reconnect_failed):
@@ -873,7 +874,7 @@ class IguanaXterm(MainWindow):
         loaded = await asyncio.shield(self._novnc_task)
         if not loaded:
             self._novnc_task = None  # let a later attempt retry
-            self._toast("Could not load the remote desktop viewer.")
+            self._toast("Could not load the remote desktop viewer.", kind="error")
         return loaded
 
     async def _load_novnc(self) -> bool:
@@ -946,9 +947,9 @@ class IguanaXterm(MainWindow):
             # "disconnected" here would replace it before anyone could read it.
             refused = current.pop("refused", "")
             if refused:
-                self._toast(f"{current['name']}: {refused}")
+                self._toast(f"{current['name']}: {refused}", kind="error")
             elif not clean:
-                self._toast(f"{current['name']}: the remote desktop disconnected.")
+                self._toast(f"{current['name']}: the remote desktop disconnected.", kind="warning")
             self._sync_reconnect_all()
 
         def _on_security_failure(event) -> None:
@@ -1014,7 +1015,8 @@ class IguanaXterm(MainWindow):
                 pane["clip_warned"] = True
                 self._toast(
                     "The browser did not share its clipboard. Allow clipboard access "
-                    "for this site to paste into the desktop."
+                    "for this site to paste into the desktop.",
+                    kind="warning",
                 )
         if text:
             rfb.clipboardPasteFrom(text)
@@ -1022,7 +1024,7 @@ class IguanaXterm(MainWindow):
         if then_paste:
             rfb.sendKey(_XK_V, "KeyV")
         elif text:
-            self._toast("Sent to the desktop's clipboard. Paste there as usual.")
+            self._toast("Sent to the desktop's clipboard. Paste there as usual.", kind="success")
         rfb.focus()
 
     async def _clipboard_from_desktop(self, pane_id: str, automatic: bool = False) -> None:
@@ -1044,14 +1046,14 @@ class IguanaXterm(MainWindow):
             if button:
                 button.hidden = False
             if not automatic:
-                self._toast("The browser refused to write the clipboard.")
+                self._toast("The browser refused to write the clipboard.", kind="error")
             return
         pane["clip_pending"] = None
         if button:
             button.hidden = True
         # The server echoes back what we just sent it; that is not news.
         if text != pane.get("clip_sent"):
-            self._toast(f"Copied {len(text)} characters from the desktop.")
+            self._toast(f"Copied {len(text)} characters from the desktop.", kind="success")
 
     def _show_reconnect(self, pane_id: str, session: dict) -> None:
         """
@@ -1163,7 +1165,7 @@ class IguanaXterm(MainWindow):
         if pane is None or which not in ("terminal", "files"):
             return
         if which == "files" and not pane["has_files"]:
-            self._toast("This connection has no file browser.")
+            self._toast("This connection has no file browser.", kind="warning")
             return
         if which == "terminal" and not pane["has_terminal"]:
             return
@@ -1205,7 +1207,7 @@ class IguanaXterm(MainWindow):
         # host both count, and closing either leaves the other's channel up.
         result = await SFTPService().retain_async(session_id)
         if not result.get("ok"):
-            self._toast(result.get("error", "Could not open SFTP"))
+            self._toast(result.get("error", "Could not open SFTP"), kind="error")
             # Leave the pane on its terminal rather than on an empty panel, and
             # let a later click try again.
             pane["files_mounted"] = False
@@ -1345,7 +1347,7 @@ class IguanaXterm(MainWindow):
         )
         loaded = await self._load_asset("script", {"src": "/gridstack/gridstack-all.js"})
         if not loaded or not getattr(js.window, "GridStack", None):
-            self._toast("Could not load the tiling library.")
+            self._toast("Could not load the tiling library.", kind="error")
             return False
         return True
 
@@ -1610,7 +1612,8 @@ class IguanaXterm(MainWindow):
         if restored:
             self._toast(
                 f"Restored {restored} connection(s). Reconnect one, "
-                "or use Reconnect all in the toolbar."
+                "or use Reconnect all in the toolbar.",
+                kind="info",
             )
 
     # ------------------------------------------------------------------
@@ -1702,7 +1705,7 @@ class IguanaXterm(MainWindow):
         if session is None:
             return
         if not session_caps(session.get("type"))["files"]:
-            self._toast("This connection has no file browser.")
+            self._toast("This connection has no file browser.", kind="warning")
             return
 
         existing = next(
@@ -1797,7 +1800,7 @@ class IguanaXterm(MainWindow):
         if result.get("ok") is False:
             entry["table"].set_rows([])
             entry["table"].set_empty_text(result.get("error", "Could not list directory"))
-            self._toast(result.get("error", "Could not list directory"))
+            self._toast(result.get("error", "Could not list directory"), kind="error")
             return
 
         entry["path"] = result["path"]
@@ -1839,22 +1842,22 @@ class IguanaXterm(MainWindow):
         where = self._saved_location or "the server's downloads folder"
         instead = f"Files go to your downloads folder; folders are saved in {where}."
         if not filetransfer.capabilities().secure_context:
-            message = f"Choosing where to save needs HTTPS (or 127.0.0.1). {instead}"
+            notice = f"Choosing where to save needs HTTPS (or 127.0.0.1). {instead}"
         # getattr, not js.navigator.brave: a missing JS property raises
         # AttributeError in Pyodide rather than reading as undefined.
         elif getattr(js.navigator, "brave", None):
-            message = (
+            notice = (
                 "Brave has the save dialog switched off: enable "
                 "brave://flags/#file-system-access-api and relaunch to choose "
                 f"where downloads go. Until then: {instead[0].lower()}{instead[1:]}"
             )
         else:
-            message = (
+            notice = (
                 "This browser cannot choose where to save (Chrome, Edge and "
                 f"Chromium can). {instead}"
             )
-        text_el.textContent = message
-        note.title = message
+        text_el.textContent = notice
+        note.title = notice
         note.dataset.shown = "true"
 
     def _render_crumbs(self, tab_id: str, path: str) -> None:
@@ -1942,7 +1945,7 @@ class IguanaXterm(MainWindow):
             entry = self._sftp_tabs.get(tab_id)
             selected = entry["table"].get_selected_ids() if entry else []
             if not selected:
-                self._toast("Select something to download first.")
+                self._toast("Select something to download first.", kind="warning")
                 return
             _spawn(self._download(tab_id, selected), "sftp download")
         elif action == "mkdir":
@@ -1979,7 +1982,7 @@ class IguanaXterm(MainWindow):
                     self._download_url(entry["session_id"], row["id"]), row["name"]
                 )
             if files and not folders:
-                self._toast(f"Sent {len(files)} file(s) to your downloads folder.")
+                self._toast(f"Sent {len(files)} file(s) to your downloads folder.", kind="success")
             # A folder cannot be written through this browser, so it is saved
             # on the server instead, and fetched from Saved files.
             for folder in folders:
@@ -1996,7 +1999,7 @@ class IguanaXterm(MainWindow):
             chosen = await filetransfer.pick_save_file(suggested)
             if not chosen.ok:
                 if not chosen.cancelled:
-                    self._toast(chosen.error or "Could not open the save dialog.")
+                    self._toast(chosen.error or "Could not open the save dialog.", kind="error")
                 return
             await self._run_download_queue(
                 tab_id, [(row["id"], row["name"], chosen.id, None)]
@@ -2007,7 +2010,7 @@ class IguanaXterm(MainWindow):
         chosen = await filetransfer.pick_folder()
         if not chosen.ok:
             if not chosen.cancelled:
-                self._toast(chosen.error or "Could not open the folder picker.")
+                self._toast(chosen.error or "Could not open the folder picker.", kind="error")
             return
 
         jobs = [(row["id"], row["name"], None, row["name"]) for row in files]
@@ -2015,7 +2018,7 @@ class IguanaXterm(MainWindow):
             jobs.extend(await self._expand_folder(entry["session_id"], folder))
 
         if not jobs:
-            self._toast("Nothing to download.")
+            self._toast("Nothing to download.", kind="warning")
             filetransfer.release(chosen.id)
             return
 
@@ -2091,7 +2094,7 @@ class IguanaXterm(MainWindow):
         """
         started = await DownloadService().start_async(session_id, folder["id"])
         if not started.get("ok"):
-            self._toast(started.get("error") or "Could not start saving the folder.")
+            self._toast(started.get("error") or "Could not start saving the folder.", kind="error")
             return
         job = started["job"]
         job_id = job["id"]
@@ -2131,7 +2134,8 @@ class IguanaXterm(MainWindow):
             self._queue_finish(tab_id, transfer_id, "done", detail)
             self._toast(
                 f"This browser cannot choose a folder, so it was saved to {where} "
-                f"({job['files_done']} file(s)). Saved files lists it too."
+                f"({job['files_done']} file(s)). Saved files lists it too.",
+                kind="info",
             )
         elif job["state"] == "cancelled":
             self._queue_finish(tab_id, transfer_id, "cancelled",
@@ -2180,7 +2184,7 @@ class IguanaXterm(MainWindow):
         async def _show(path: str) -> None:
             listing = await DownloadService().list_async(path)
             if not listing.get("ok"):
-                self._toast(listing.get("error") or "Could not read the downloads folder.")
+                self._toast(listing.get("error") or "Could not read the downloads folder.", kind="error")
                 return
             state["path"] = listing["path"]
             label = js.document.getElementById("ix-saved-path")
@@ -2192,11 +2196,14 @@ class IguanaXterm(MainWindow):
             return [table.get_row(i) or {} for i in table.get_selected_ids()]
 
         async def _delete(rows: list) -> None:
-            if not rows or not js.confirm(f"Delete {len(rows)} item(s) from the server?"):
+            if not rows or not await message.confirm(
+                f"Delete {len(rows)} item(s) from the server?\n\nThis cannot be undone.",
+                title="Delete saved files", ok_text="Delete", danger=True,
+            ):
                 return
             result = await DownloadService().delete_async([r["id"] for r in rows])
             if not result.get("ok"):
-                self._toast(result["failed"][0]["error"] if result.get("failed") else "Delete failed")
+                self._toast(result["failed"][0]["error"] if result.get("failed") else "Delete failed", kind="error")
             await _show(state["path"])
 
         def _on_click(event) -> None:
@@ -2210,7 +2217,7 @@ class IguanaXterm(MainWindow):
             elif action == "download":
                 files = [r for r in _selected_rows() if r and not r.get("is_dir")]
                 if not files:
-                    self._toast("Select files to download. Open a folder to see its files.")
+                    self._toast("Select files to download. Open a folder to see its files.", kind="warning")
                     return
                 for row in files:
                     filetransfer.download_via_anchor(
@@ -2239,7 +2246,7 @@ class IguanaXterm(MainWindow):
         jobs: list = []
         async for item in SFTPService().walk(session_id, folder["id"]):
             if item.get("error"):
-                self._toast(item["error"].get("message", "Walk failed"))
+                self._toast(item["error"].get("message", "Walk failed"), kind="error")
                 continue
             if item.get("done"):
                 break
@@ -2289,7 +2296,7 @@ class IguanaXterm(MainWindow):
         if paused:
             summary += f" {paused} lost the connection and paused; press Resume."
         if renamed:
-            # One toast, not two: a second would replace this one.
+            # One toast, not two: one finished download reads as one message.
             summary += (
                 f" Renamed {renamed} name(s) this computer cannot store as "
                 "they are on the server."
@@ -2303,7 +2310,7 @@ class IguanaXterm(MainWindow):
                     f" {len(kept)} items were already there, so the new ones "
                     "were numbered instead of replacing them."
                 )
-        self._toast(summary)
+        self._toast(summary, kind="success" if done == len(jobs) and not paused else "warning")
 
     # ── Upload ─────────────────────────────────────────────────────────────
 
@@ -2312,7 +2319,7 @@ class IguanaXterm(MainWindow):
         chosen = await filetransfer.pick_files(multiple=True, directory=directory)
         if not chosen.ok:
             if not chosen.cancelled:
-                self._toast(chosen.error or "Could not open the file picker.")
+                self._toast(chosen.error or "Could not open the file picker.", kind="error")
             return
         await self._run_upload_queue(tab_id, chosen.files)
 
@@ -2365,23 +2372,25 @@ class IguanaXterm(MainWindow):
             else:
                 self._queue_finish(tab_id, transfer_id, "failed", outcome.error)
 
-        self._toast(f"Uploaded {done} of {len(files)} file(s).")
+        self._toast(f"Uploaded {done} of {len(files)} file(s).",
+                    kind="success" if done == len(files) else "warning")
         await self._sftp_navigate(tab_id, entry["path"])
 
     def _sftp_mkdir(self, tab_id: str) -> None:
         entry = self._sftp_tabs.get(tab_id)
         if entry is None:
             return
-        name = js.prompt("New folder name:")
-        if not name:
-            return
-
         async def _run() -> None:
+            name = await message.prompt(
+                "Name of the new folder", title="New folder", ok_text="Create"
+            )
+            if not name:  # cancelled (None) or left empty
+                return
             result = await SFTPService().mkdir_async(
                 entry["session_id"], entry["path"], name
             )
             if not result.get("ok"):
-                self._toast(result.get("error", "Could not create folder"))
+                self._toast(result.get("error", "Could not create folder"), kind="error")
             await self._sftp_navigate(tab_id, entry["path"])
 
         _spawn(_run(), "sftp mkdir")
@@ -2550,11 +2559,14 @@ class IguanaXterm(MainWindow):
             return
         count = len(paths)
         label = paths[0].rsplit("/", 1)[-1] if count == 1 else f"{count} items"
-        if not js.confirm(f"Delete {label}? This cannot be undone."):
+        if not await message.confirm(
+            f"Delete {label}?\n\nThis cannot be undone.",
+            title="Delete", ok_text="Delete", danger=True,
+        ):
             return
         result = await SFTPService().delete_async(entry["session_id"], paths)
         if result.get("failed"):
-            self._toast(f"{len(result['failed'])} item(s) could not be deleted.")
+            self._toast(f"{len(result['failed'])} item(s) could not be deleted.", kind="error")
         await self._sftp_navigate(tab_id, entry["path"])
 
     def _sftp_rename(self, tab_id: str, path: str) -> None:
@@ -2562,16 +2574,18 @@ class IguanaXterm(MainWindow):
         if entry is None:
             return
         current = path.rsplit("/", 1)[-1]
-        new_name = js.prompt("New name:", current)
-        if not new_name or new_name == current:
-            return
 
         async def _run() -> None:
+            new_name = await message.prompt(
+                f"New name for “{current}”", title="Rename", value=current, ok_text="Rename"
+            )
+            if not new_name or new_name == current:  # cancelled, empty or unchanged
+                return
             result = await SFTPService().rename_async(
                 entry["session_id"], path, new_name
             )
             if not result.get("ok"):
-                self._toast(result.get("error", "Rename failed"))
+                self._toast(result.get("error", "Rename failed"), kind="error")
             await self._sftp_navigate(tab_id, entry["path"])
 
         _spawn(_run(), "sftp rename")
@@ -2585,7 +2599,7 @@ class IguanaXterm(MainWindow):
         if session_id:
             existing = await SessionService().get_async(session_id)
             if not existing:
-                self._toast("Session not found.")
+                self._toast("Session not found.", kind="error")
                 return
 
         modal = ModalWindow(
@@ -2745,18 +2759,21 @@ class IguanaXterm(MainWindow):
         session = self._session(session_id)
         if session is None:
             return
-        if not js.confirm(f"Delete session “{session['name']}”?"):
+        if not await message.confirm(
+            f"Delete session “{session['name']}”?",
+            title="Delete session", ok_text="Delete", danger=True,
+        ):
             return
         result = await SessionService().delete_async(session_id)
         if not result.get("ok"):
-            self._toast(result.get("error", "Could not delete"))
+            self._toast(result.get("error", "Could not delete"), kind="error")
             return
         self._selected_id = None
         await self._reload_sessions()
 
     async def _forget_host_key(self, session_id: int) -> None:
         await SessionService().clear_host_key_async(session_id)
-        self._toast("Host key cleared; it will be re-pinned on next connect.")
+        self._toast("Host key cleared; it will be re-pinned on next connect.", kind="success")
         await self._reload_sessions()
 
     # ------------------------------------------------------------------
@@ -2801,7 +2818,7 @@ class IguanaXterm(MainWindow):
                     return
                 modal.hide()
                 self._me["must_change_password"] = False
-                self._toast("Password changed.")
+                self._toast("Password changed.", kind="success")
             finally:
                 form.set_busy(False)
 
@@ -2811,7 +2828,7 @@ class IguanaXterm(MainWindow):
 
     async def _admin_panel(self) -> None:
         if not self._me.get("is_admin"):
-            self._toast("Administrator access required.")
+            self._toast("Administrator access required.", kind="warning")
             return
 
         modal = ModalWindow(ModalConfig(title="Users", width=760, height=560))
@@ -2857,8 +2874,9 @@ class IguanaXterm(MainWindow):
             async def _run() -> None:
                 service = UserService()
                 if action == "delete":
-                    if not js.confirm(
-                        f"Delete “{row.get('username')}” and all their saved sessions?"
+                    if not await message.confirm(
+                        f"Delete “{row.get('username')}” and all their saved sessions?",
+                        title="Delete user", ok_text="Delete", danger=True,
                     ):
                         return
                     result = await service.delete_async(int(user_id))
@@ -2867,10 +2885,11 @@ class IguanaXterm(MainWindow):
                         int(user_id), not row.get("is_admin")
                     )
                 elif action == "reset":
-                    new_password = js.prompt(
-                        f"New password for {row.get('username')} (min 8 chars):"
+                    new_password = await message.prompt(
+                        f"New password for {row.get('username')} (at least 8 characters)",
+                        title="Reset password", ok_text="Reset", password=True,
                     )
-                    if not new_password:
+                    if not new_password:  # cancelled or left empty
                         return
                     result = await service.reset_password_async(
                         int(user_id), new_password
@@ -2882,7 +2901,8 @@ class IguanaXterm(MainWindow):
                     self._toast(
                         result.get("error")
                         or "; ".join((result.get("errors") or {}).values())
-                        or "Action failed"
+                        or "Action failed",
+                        kind="error",
                     )
                 await _refresh()
 
@@ -2930,22 +2950,9 @@ class IguanaXterm(MainWindow):
     # Feedback
     # ------------------------------------------------------------------
 
-    def _toast(self, message: str) -> None:
-        holder = js.document.getElementById("ix-toast")
-        if not holder:  # JsNull, not None, when absent
-            holder = js.document.createElement("div")
-            holder.id = "ix-toast"
-            holder.className = "ix-toast"
-            js.document.body.appendChild(holder)
-            style = js.document.createElement("style")
-            style.textContent = _TOAST_CSS
-            js.document.head.appendChild(style)
-        holder.textContent = message
-        holder.dataset.visible = "true"
-        js.window.clearTimeout(getattr(self, "_toast_timer", 0) or 0)
-        self._toast_timer = js.window.setTimeout(
-            create_proxy(lambda: holder.removeAttribute("data-visible")), 4000
-        )
+    def _toast(self, text: str, kind: str = "info") -> None:
+        """A wapyt toast: info, success, warning or error."""
+        message.toast(text, kind=kind)
 
 
 _NAG_CSS = """
@@ -3255,10 +3262,3 @@ _ADMIN_CSS = """
 .ix-admin-form{flex:0 0 auto;}
 """
 
-_TOAST_CSS = """
-.ix-toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(12px);
-  padding:10px 18px;border-radius:8px;background:#1e293b;color:#e2e8f0;
-  font:13px system-ui,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.4);
-  opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;z-index:10000;}
-.ix-toast[data-visible]{opacity:1;transform:translateX(-50%) translateY(0);}
-"""

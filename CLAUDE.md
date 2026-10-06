@@ -292,8 +292,8 @@ directories share one namespace per folder. Platform detection is
 `_local_platform()`: `userAgentData.platform`, falling back to
 `navigator.platform`. **Linux maps every name to itself.** The single-file Save
 dialog gets the cleaned name as its suggestion. The rename count joins the
-"Downloaded N of M" toast instead of getting its own, because a second toast
-replaces the first.
+"Downloaded N of M" toast instead of getting its own, so one finished
+download reads as one message.
 
 **Nothing already in the destination is replaced.** `getFileHandle(name,
 {create: true})` opens an existing file and writing replaces it, silently. So
@@ -465,6 +465,17 @@ laggy. The Python `Terminal` wrapper drives lifecycle only.
 
 Same reasoning for file transfers: they use `services/transfer.py`, not the BFF,
 because a JSON BFF means base64 — a third larger and resident in Pyodide's heap.
+
+### Toasts and dialogs go through `wapyt.message`
+
+`self._toast(text, kind=...)` is a one-line delegate to `message.toast`; pass
+`kind="error"` for failures, `"success"` for a finished action, `"warning"` for
+"select something first"-style guidance. Toasts stack (at most four), so a
+second one no longer replaces the first. Never call `js.confirm()` or
+`js.prompt()`: use `await message.confirm(..., danger=True)` /
+`await message.prompt(...)` from an async method. `prompt` returns `None` when
+cancelled and `""` when left empty. The admin password reset prompt shows its
+text as typed, as `js.prompt` did; `message.prompt` has no password mode.
 
 ### JS `null` is `JsNull`, not `None`
 

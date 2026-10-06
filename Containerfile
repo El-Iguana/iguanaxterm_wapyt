@@ -25,8 +25,8 @@ ARG PYTHON_IMAGE=docker.io/library/python:3.13-slim
 # ── wapyt source, from GitHub ────────────────────────────────────────────────
 FROM ${PYTHON_IMAGE} AS wapyt-git
 ARG WAPYT_REPO=https://github.com/WAwesome-AI/wa_pytincture_widgetset.git
-# The commit Monguana was verified against. Bump deliberately.
-ARG WAPYT_REF=2a3bc1996978c71d0d52033d0056e8a5e3382539
+# The commit IguanaXterm was verified against. Bump deliberately.
+ARG WAPYT_REF=b7f65a6b833d8dae6de26846038dfbd94e3da0b3
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 RUN git clone --filter=blob:none "$WAPYT_REPO" /src \

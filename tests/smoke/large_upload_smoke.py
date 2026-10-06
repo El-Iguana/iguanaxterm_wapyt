@@ -39,7 +39,7 @@ def check(ok, label, detail=""):
 HELPERS = """
 window.__ix = {
   csrf() {
-    const m = document.cookie.match(/(?:^|;\\s*)pytincture[^=]*csrf=([^;]+)/i);
+    const m = document.cookie.match(/(?:^|;\\s*)(?:__Host-iguanaxterm-csrf|iguanaxterm-dev-csrf)=([^;]+)/);
     return m ? decodeURIComponent(m[1]) : "";
   },
   blob(mb, seed) {

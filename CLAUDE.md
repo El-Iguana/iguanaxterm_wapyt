@@ -130,18 +130,17 @@ absolute ones (`/static/…`, `/ws/…`, `/files/…`, `/gridstack/…`, `/novnc
 Keep it that way. `PytinctureConfig(enable_service_worker=False)` is the
 supported opt-out if the worker ever needs to go.
 
-### Cookie names (`cookie_namespace`, pytincture rc13+) — still the default
+### Cookie names (`cookie_namespace`, pytincture rc13+) — `iguanaxterm`
 
 `service.COOKIE_NAMESPACE` feeds `PytinctureConfig(cookie_namespace=...)`;
 session and CSRF cookies are `<ns>-dev-*` on loopback HTTP and `__Host-<ns>-*`
-over HTTPS. It is **`"pytincture"`, the default**, for now: switching to
-`"iguanaxterm"` (so another pytincture app on the host cannot sign this one
-out) breaks every upload, because wapyt's `filetransfer.js` only sends
-`X-CSRF-Token` for cookies named `pytincture*` and `transfer._require_csrf`
-then answers 403. Seen in `transfer_smoke` with the namespace on: downloads
-fine, upload 403. Once wapyt matches pytincture's `<ns>-csrf` shapes, change
-`COOKIE_NAMESPACE`, `_CSRF_COOKIES` in appcode (a test keeps the two in step)
-and the regex in `tests/smoke/large_upload_smoke.py`. The WebSocket and file
+over HTTPS. It is **`"iguanaxterm"`** (2026-10-06), so another pytincture
+app on the host cannot sign this one out. That needed wapyt 10c24e8
+(wa_pytincture_widgetset#30): before it, `filetransfer.js` only sent
+`X-CSRF-Token` for `pytincture*` cookies and every upload got 403 from
+`transfer._require_csrf`. Changing the namespace means `COOKIE_NAMESPACE`,
+`_CSRF_COOKIES` in appcode (a test keeps the two in step) and the regex in
+`tests/smoke/large_upload_smoke.py`, and signs users out once. The WebSocket and file
 routes read the session through pytincture's middleware (`request.session` /
 `websocket.session`), so they follow the namespace by themselves; the
 browser's `_csrf_token()` matches `_CSRF_COOKIES` exactly, since another app's

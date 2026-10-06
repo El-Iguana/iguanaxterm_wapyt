@@ -154,7 +154,7 @@ def _recovered(outcome) -> str:
 # HTTPS, -dev- over loopback HTTP. Matched exactly, because another pytincture
 # app on the same host has its own CSRF cookie, and sending that one fails
 # every upload.
-_CSRF_COOKIES = ("__Host-pytincture-csrf", "pytincture-dev-csrf")
+_CSRF_COOKIES = ("__Host-iguanaxterm-csrf", "iguanaxterm-dev-csrf")
 
 
 def _csrf_token() -> str:

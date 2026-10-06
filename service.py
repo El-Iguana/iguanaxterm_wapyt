@@ -83,12 +83,12 @@ from services.downloads import router as downloads_router  # noqa: E402
 from services.vnc_ws import router as vnc_router  # noqa: E402
 
 APPLICATION = "iguanaxterm"
-# pytincture's default cookie names for now. "iguanaxterm" (own names, so
-# another pytincture app on the host cannot sign this one out) waits on wapyt:
-# filetransfer.js only sends the CSRF header for cookies named pytincture*,
-# so every upload would 403. Switch here, in _CSRF_COOKIES and in
-# tests/smoke/large_upload_smoke.py together.
-COOKIE_NAMESPACE = "pytincture"
+# IguanaXterm's own cookie names (iguanaxterm-dev-*, __Host-iguanaxterm-*),
+# so another pytincture app on the host cannot sign this one out. Needs wapyt
+# >= 10c24e8, whose filetransfer.js sends the CSRF header for a namespaced
+# cookie. Change it here, in _CSRF_COOKIES and in
+# tests/smoke/large_upload_smoke.py together; a change signs users out once.
+COOKIE_NAMESPACE = "iguanaxterm"
 PORT = int(os.getenv("PORT", "8765"))
 # The address uvicorn listens on. With host networking (Linux) the container
 # would otherwise publish plain HTTP to the whole network, so

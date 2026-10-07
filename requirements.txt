@@ -4,7 +4,7 @@
 # against: 1.0.0rc13 before it is tagged (swap to @v1.0.0rc13 once it is,
 # with pyproject.toml). PyPI carries the 1.0.0rc line too, but the source of
 # truth is the repository.
-pytincture @ git+https://github.com/pytincture/pytincture.git@c02633323b08f2356a6768db83cd040f338caab7
+pytincture @ git+https://github.com/pytincture/pytincture.git@v1.0.0rc13
 paramiko>=3.4.0
 bcrypt>=4.1.0
 cryptography>=42.0.0

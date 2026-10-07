@@ -16,9 +16,8 @@ shared with Monguana's phase 40).
 
 Siblings under `~/Development/Pytinc/`, each with its own `CLAUDE.md`:
 
-- `pytincture/` — the framework, pinned to commit `c026333` (1.0.0rc13, not yet
-  tagged) in `pyproject.toml` *and* `requirements.txt`; swap both to tag
-  `v1.0.0rc13` once it exists.
+- `pytincture/` — the framework, pinned to tag `v1.0.0rc13` in `pyproject.toml`
+  *and* `requirements.txt` (keep them in step).
 - `wa_pytincture_widgetset/` — **wapyt**, the widgetset. This app added four
   widgets to it: `Terminal`, `Form`, `DataTable`, `Tree`.
 - `iguanaxterm_pyt/` — the abandoned dhxpyt attempt. Reference only.

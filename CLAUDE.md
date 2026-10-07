@@ -232,13 +232,16 @@ time, surfacing as a 500 with a correlation id. Every intra-package import in
 `appcode/services/` is absolute (`from services.db import ...`), including the
 ones inside functions.
 
-### wapyt must be installed non-editable
+### wapyt installed editable (fixed in pytincture 1.0.0rc13)
 
-An editable install exposes only a `.pth` and dist-info: `distribution.files`
-never lists `wapyt/__init__.py`, and `PathFinder.find_spec()` returns
-`origin=None` for the editable finder. Widgetset discovery then finds nothing,
-the bootstrap page ships `widgetlib: ""`, and the app loads with no widgets and
-no error. `pyproject.toml` pins `editable = false` for this reason.
+Before pytincture 1.0.0rc13 (#379), an editable install was invisible to
+widgetset discovery: it exposes only a `.pth` and dist-info, so
+`distribution.files` never lists `wapyt/__init__.py` and
+`PathFinder.find_spec()` returns `origin=None` for the editable finder. The
+bootstrap page shipped `widgetlib: ""` and the app loaded with no widgets and
+no error. The pin is rc13 now, which discovers editable installs.
+`pyproject.toml` still says `editable = false` so development installs the
+built wheel the image and the Windows bundle ship.
 
 ### The login field is hardcoded to type="email"
 

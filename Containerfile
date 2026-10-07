@@ -10,7 +10,8 @@
 # wapyt, the widgetset, is not on PyPI, so the first stages fetch it from
 # GitHub at a pinned commit and build the two wheels the app needs:
 #   * wapyt 0.1.0 — installed into the server's Python, where pytincture's
-#     widgetset discovery reads it (it must not be an editable install);
+#     widgetset discovery reads it (before pytincture 1.0.0rc13 it could
+#     not see an editable install; a built wheel is what ships anyway);
 #   * wapyt 99.99.99 — the development wheel the *browser* installs from the
 #     app's modules folder, with its asset manifest regenerated for that
 #     version (pytincture hash-checks every widget asset).

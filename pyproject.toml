@@ -47,11 +47,10 @@ pytincture = { git = "https://github.com/pytincture/pytincture.git", tag = "v1.0
 # Server-side only, for widgetset discovery: pytincture AST-walks the app's
 # imports and reads __widgetset__ from the installed distribution. The browser
 # installs the dev wheel from appcode/ instead of this checkout.
-# NOT editable, deliberately. pytincture's widgetset discovery reads
-# __widgetset__ from the installed distribution, and an editable install exposes
-# only a .pth plus dist-info — distribution.files never lists wapyt/__init__.py,
-# and PathFinder.find_spec() returns origin=None for the editable finder. The
-# result is a silent `widgetlib: ""` and an app with no widgets. Re-run
+# Not editable, so development installs what the image and the Windows bundle
+# ship: a built wheel. (Before pytincture 1.0.0rc13, #379, it had to be: an
+# editable install exposes only a .pth plus dist-info, discovery found no
+# widgetset, and the app booted with no widgets, silently.) Re-run
 # `uv sync --reinstall-package wapyt` after changing wapyt's Python wrappers;
 # asset edits go through scripts/dev_wheel.sh instead.
 wapyt = { path = "../wa_pytincture_widgetset", editable = false }

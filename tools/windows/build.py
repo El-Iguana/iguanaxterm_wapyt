@@ -128,7 +128,7 @@ def install_packages(bundle: Path, wapyt: Path, work: Path) -> None:
     run([*base, "--only-binary", ":all:", "-r", requirements,
          "-r", HERE / "requirements-launcher.txt"])
     # Pure Python, built from source: pytincture at the locked commit, and
-    # wapyt non-editable (widgetset discovery reads the installed metadata).
+    # wapyt as a built wheel, the same as the image installs.
     run([*base, "--no-deps", "-r", work / "pytincture.txt"])
     wheels = work / "server-wheels"
     run(["uv", "build", "--wheel", "--quiet", "--out-dir", wheels, wapyt])

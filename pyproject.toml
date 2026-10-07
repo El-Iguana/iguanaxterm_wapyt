@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "iguanaxterm"
-version = "2.1.1"
+version = "2.2.0"
 description = "Browser-based SSH/Telnet terminal manager — pytincture + wapyt"
 readme = "README.md"
 license = { text = "MIT" }

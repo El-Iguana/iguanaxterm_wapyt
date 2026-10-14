@@ -16,7 +16,7 @@ shared with Monguana's phase 40).
 
 Siblings under `~/Development/Pytinc/`, each with its own `CLAUDE.md`:
 
-- `pytincture/` — the framework, pinned to tag `v1.0.0rc13` in `pyproject.toml`
+- `pytincture/` — the framework, pinned to tag `v1.0.0rc15` in `pyproject.toml`
   *and* `requirements.txt` (keep them in step).
 - `wa_pytincture_widgetset/` — **wapyt**, the widgetset. This app added four
   widgets to it: `Terminal`, `Form`, `DataTable`, `Tree`.
@@ -239,7 +239,7 @@ widgetset discovery: it exposes only a `.pth` and dist-info, so
 `distribution.files` never lists `wapyt/__init__.py` and
 `PathFinder.find_spec()` returns `origin=None` for the editable finder. The
 bootstrap page shipped `widgetlib: ""` and the app loaded with no widgets and
-no error. The pin is rc13 now, which discovers editable installs.
+no error. The pin is rc15 now, which discovers editable installs.
 `pyproject.toml` still says `editable = false` so development installs the
 built wheel the image and the Windows bundle ship.
 

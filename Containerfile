@@ -57,9 +57,8 @@ FROM ${PYTHON_IMAGE}
 WORKDIR /app
 
 # gcc + libffi cover the bcrypt/cryptography C extensions on architectures
-# without prebuilt wheels (a no-op on x86_64 and arm64); git is needed by pip
-# to install pytincture from its repository.
-RUN apt-get update && apt-get install -y --no-install-recommends gcc libffi-dev git \
+# without prebuilt wheels (a no-op on x86_64 and arm64).
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

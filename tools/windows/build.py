@@ -105,7 +105,7 @@ def locked_requirements(work: Path) -> Path:
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        if line.startswith("pytincture @"):
+        if line.startswith(("pytincture @", "pytincture==")):
             pytincture = line
         elif line.startswith(("../", "./", "-e ")) or line.startswith("wapyt"):
             continue
@@ -127,7 +127,7 @@ def install_packages(bundle: Path, wapyt: Path, work: Path) -> None:
     base = ["uv", "pip", "install", "--quiet", "--target", site, *TARGET]
     run([*base, "--only-binary", ":all:", "-r", requirements,
          "-r", HERE / "requirements-launcher.txt"])
-    # Pure Python, built from source: pytincture at the locked commit, and
+    # Pure Python: pytincture at the locked version (PyPI or git), and
     # wapyt as a built wheel, the same as the image installs.
     run([*base, "--no-deps", "-r", work / "pytincture.txt"])
     wheels = work / "server-wheels"

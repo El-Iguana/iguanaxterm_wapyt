@@ -194,7 +194,7 @@ uv sync
 uv run python service.py
 ```
 
-To develop against a local pytincture checkout instead of the pinned git tag:
+To develop against a local pytincture checkout instead of the pinned PyPI release:
 `uv add --editable ../pytincture`.
 
 ## Configuration

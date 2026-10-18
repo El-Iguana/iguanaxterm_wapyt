@@ -357,7 +357,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=42.0.0" },
     { name = "paramiko", specifier = ">=3.4.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "pytincture", git = "https://github.com/pytincture/pytincture.git?tag=v1.0.0rc15" },
+    { name = "pytincture", specifier = "==1.0.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
     { name = "wapyt", directory = "../wa_pytincture_widgetset" },
 ]
@@ -684,8 +684,8 @@ wheels = [
 
 [[package]]
 name = "pytincture"
-version = "1.0.0rc15"
-source = { git = "https://github.com/pytincture/pytincture.git?tag=v1.0.0rc15#661d1c812da3ef8a2d327e2a890bedf636fd4c7f" }
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastapi" },
     { name = "itsdangerous" },
@@ -695,6 +695,10 @@ dependencies = [
     { name = "python-multipart" },
     { name = "starlette" },
     { name = "uvicorn" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9c/54/0e5a83cae9be8cc109e518e283a9aa253d6e2534665a94e07a717ca02817/pytincture-1.0.0.tar.gz", hash = "sha256:5abb712ba53b3bf5e2fc3bbe2ce05c93482856ff033b96e2094d5f8dfd3a6831", size = 7387640, upload-time = "2026-10-18T03:01:43.206Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e0/72/483a79c74595d14b669773402d45848754b3b696cc4a4fb8faba31766f2b/pytincture-1.0.0-py3-none-any.whl", hash = "sha256:27fcddb551619f998c879c938ffe1f038ea7e13afc9cf528f1f70fcc1518c828", size = 7432720, upload-time = "2026-10-18T03:01:41.16Z" },
 ]
 
 [[package]]

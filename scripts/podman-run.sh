@@ -12,6 +12,11 @@
 # old mapping would otherwise read as someone else's ("attempt to write a
 # readonly database").
 #
+# Host networking, not rootless pasta: through pasta an FTPS upload to the
+# LAN NAS crawled at 0.3 MiB/s with 13 s write stalls (and timed out at 20 s),
+# against ~80 MiB/s for the same image on --network host (measured
+# 2026-10-23). The server binds 127.0.0.1 itself, so it is still not on the LAN.
+#
 # Uses plain podman rather than compose: `podman compose` delegates to the
 # Docker Compose CLI plugin and needs the podman socket running, which is one
 # more thing to go wrong for a local test instance.
@@ -55,8 +60,10 @@ podman run -d \
   --restart unless-stopped \
   --label app=IguanaXterm \
   --userns=keep-id:uid=10001,gid=999 \
-  -p "127.0.0.1:$PORT:8765" \
+  --network host \
   --env-file .env \
+  -e GANXTERM_BIND=127.0.0.1 \
+  -e "PORT=$PORT" \
   -e GANXTERM_DATA_DIR=/data \
   -e "GANXTERM_CANONICAL_ORIGIN=http://127.0.0.1:$PORT" \
   -e GANXTERM_DOWNLOAD_DIR=/downloads \

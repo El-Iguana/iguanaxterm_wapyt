@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import logging
 
 import anyio
 import posixpath
@@ -35,6 +36,8 @@ from services import ftp as ftp_helpers
 from services import http_ranges
 from services import ssh as ssh_helpers
 from services.pool import transfer_pool
+
+logger = logging.getLogger("iguanaxterm.transfer")
 
 router = APIRouter(prefix="/files")
 
@@ -335,8 +338,10 @@ async def upload(request: Request, session_id: int) -> dict:
             None, lambda: transfer_pool.acquire(user_id, int(session_id), profile)
         )
     except (ssh_helpers.SSHUnavailable, ftp_helpers.FTPUnavailable) as exc:
+        logger.warning("upload failed: session %s unreachable: %s", session_id, exc)
         raise HTTPException(status_code=503, detail=str(exc))
     except ssh_helpers.HostKeyChanged as exc:
+        logger.warning("upload refused: session %s host key changed: %s", session_id, exc)
         raise HTTPException(status_code=409, detail=str(exc))
 
     parts = _UploadParts()
@@ -389,12 +394,24 @@ async def upload(request: Request, session_id: int) -> dict:
             raise HTTPException(status_code=400, detail="No file in the upload")
         await loop.run_in_executor(None, handle.close)
         finished = True
-    except HTTPException:
+    except HTTPException as exc:
+        logger.warning(
+            "upload failed: session %s, %s, %d bytes written: %s",
+            session_id, remote_path or "(no destination yet)", written, exc.detail,
+        )
         raise
     except ClientDisconnect:
         # Cancelled in the queue, or the tab went away.
+        logger.info("upload cancelled: session %s, %s, %d bytes written",
+                    session_id, remote_path, written)
         raise HTTPException(status_code=499, detail="Upload cancelled")
     except Exception as exc:
+        # The browser only sees a 400 with the message; keep the traceback here.
+        logger.warning(
+            "upload failed: session %s, %s, %d bytes written: %r",
+            session_id, remote_path or "(no destination yet)", written, exc,
+            exc_info=True,
+        )
         raise HTTPException(status_code=400, detail=str(exc))
     finally:
         if handle is not None and not finished:

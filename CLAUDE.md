@@ -99,6 +99,16 @@ Traps measured writing INSTALL.md:
 - **From a bridge network `host.*.internal` does not reach 127.0.0.1-only
   services** (as for Monguana): `compose.host-network.yaml`, or VNC's SSH
   tunnel.
+- **Rootless pasta throttles uploads to the LAN** (2026-10-23). An FTPS
+  upload to the NAS through the default `pasta` network ran at 0.3 MiB/s,
+  with single writes stalling up to 13 s, so a large video hit `ftp.py`'s
+  20 s socket timeout and failed (a bare 400, before uploads were logged).
+  The same image measured 80–84 MiB/s on `--network host` and 20 MiB/s on
+  slirp4netns; FileZilla on the host was fast throughout. So
+  `podman-run.sh` uses `--network host` with `GANXTERM_BIND=127.0.0.1`, which
+  keeps the server off the LAN. If transfers crawl again, check
+  `podman inspect iguanaxterm --format '{{.HostConfig.NetworkMode}}'`
+  before suspecting the app: it should say `host`.
 - **The healthcheck sends the canonical host name** (`manage.py health`), or it
   fails behind a proxy. Verified healthy behind Caddy; terminals over
   WebSockets work through it.

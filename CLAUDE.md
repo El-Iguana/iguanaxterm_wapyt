@@ -99,16 +99,19 @@ Traps measured writing INSTALL.md:
 - **From a bridge network `host.*.internal` does not reach 127.0.0.1-only
   services** (as for Monguana): `compose.host-network.yaml`, or VNC's SSH
   tunnel.
-- **Rootless pasta throttles uploads to the LAN** (2026-10-23). An FTPS
-  upload to the NAS through the default `pasta` network ran at 0.3 MiB/s,
-  with single writes stalling up to 13 s, so a large video hit `ftp.py`'s
-  20 s socket timeout and failed (a bare 400, before uploads were logged).
-  The same image measured 80–84 MiB/s on `--network host` and 20 MiB/s on
-  slirp4netns; FileZilla on the host was fast throughout. So
-  `podman-run.sh` uses `--network host` with `GANXTERM_BIND=127.0.0.1`, which
-  keeps the server off the LAN. If transfers crawl again, check
-  `podman inspect iguanaxterm --format '{{.HostConfig.NetworkMode}}'`
-  before suspecting the app: it should say `host`.
+- **A long-running pasta process can degrade** (2026-10-23). The dev
+  container's pasta had been up five days when an FTPS upload to the NAS
+  through it ran at 0.3 MiB/s, with single writes stalling up to 13 s, so a
+  large video hit `ftp.py`'s 20 s socket timeout and failed (a bare 400,
+  before uploads were logged). FileZilla on the host was fast throughout.
+  It is not pasta as such: fresh containers measured ~82 MiB/s on pasta
+  (with `-p` too), 84–86 on a compose-style bridge network, and 84 on
+  `--network host` (64 KiB writes via `services/ftp.py`). Capping
+  the MTU at 1500 made it *worse* (23 MiB/s), and slirp4netns gave 20.
+  `podman-run.sh` uses `--network host` with `GANXTERM_BIND=127.0.0.1`
+  (still loopback only) so there is no pasta to go stale; `compose.yaml`
+  keeps its bridge network, which was fast. If transfers crawl again, first
+  restart the container and measure again, before suspecting the app.
 - **The healthcheck sends the canonical host name** (`manage.py health`), or it
   fails behind a proxy. Verified healthy behind Caddy; terminals over
   WebSockets work through it.

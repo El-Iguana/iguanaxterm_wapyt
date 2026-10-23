@@ -12,10 +12,12 @@
 # old mapping would otherwise read as someone else's ("attempt to write a
 # readonly database").
 #
-# Host networking, not rootless pasta: through pasta an FTPS upload to the
-# LAN NAS crawled at 0.3 MiB/s with 13 s write stalls (and timed out at 20 s),
-# against ~80 MiB/s for the same image on --network host (measured
-# 2026-10-23). The server binds 127.0.0.1 itself, so it is still not on the LAN.
+# Host networking, so no pasta process sits in the data path. One that had
+# been up for five days degraded: an FTPS upload to the LAN NAS crawled at
+# 0.3 MiB/s with 13 s write stalls and timed out at 20 s (2026-10-23). A fresh
+# pasta, with or without -p, measured ~82 MiB/s, and --network host ~84, so
+# pasta is not slow as such; host networking just removes the thing that
+# went wrong. The server binds 127.0.0.1 itself, so it is still not on the LAN.
 #
 # Uses plain podman rather than compose: `podman compose` delegates to the
 # Docker Compose CLI plugin and needs the podman socket running, which is one

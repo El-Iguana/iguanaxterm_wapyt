@@ -205,7 +205,7 @@ def test_me_reports_the_role(db):
 
     db.init_db()
     me = UserService({"user_id": 2, "username": "p", "role": "power"}).me()
-    assert me["role"] == "power" and me["is_admin"] is False
+    assert me["role"] == "power" and "is_admin" not in me
 
 
 def test_create_records_who_made_the_account(db):
@@ -218,14 +218,14 @@ def test_create_records_who_made_the_account(db):
     assert (row["created_by"], row["role"]) == (1, "user")
 
 
-def test_create_without_a_role_keeps_the_old_checkbox_meaning(db):
+def test_create_defaults_to_user_and_refuses_unknown_roles(db):
     from services.user_service import UserService
 
     db.init_db()
     admin = UserService(ADMIN)
     assert admin.create("plain", "plain-password")["ok"]
-    assert admin.create("boss", "boss-password", True)["ok"]
-    assert role(db, "plain") == ("power", 0)
+    assert role(db, "plain") == ("user", 0)
+    assert admin.create("boss", "boss-password", "admin")["ok"]
     assert role(db, "boss") == ("admin", 1)
     assert admin.create("odd", "odd-password", role="root")["errors"]["role"]
 
@@ -237,7 +237,7 @@ def test_list_returns_roles(db):
     admin = UserService(ADMIN)
     admin.create("frank", "franks-password", role="user")
     rows = {row["username"]: row for row in admin.list()}
-    assert rows["admin"]["role"] == "admin" and rows["admin"]["is_admin"] is True
+    assert rows["admin"]["role"] == "admin" and "is_admin" not in rows["admin"]
     assert rows["frank"]["role"] == "user" and rows["frank"]["created_by"] == 1
 
 
@@ -253,30 +253,35 @@ def test_set_role_and_the_last_admin_guards(db):
     assert admin.set_role(gina, "root")["error"] == "Unknown role"
     assert admin.set_role(999, "user")["error"] == "User not found"
 
-    # You can't demote yourself, and the last admin can't be demoted or deleted.
+    # You can't demote or delete yourself, so the only Admin stays one. (The
+    # last-admin guard behind that is what manage.py set-role relies on.)
     assert "own admin" in admin.set_role(1, "power")["error"]
+    assert "own account" in admin.delete(1)["error"]
+    # A session that claims Admin counts for nothing once the database disagrees.
     other_admin = UserService({"user_id": gina, "role": "admin", "is_admin": True})
-    assert "last administrator" in other_admin.set_role(1, "user")["error"]
-    assert "last administrator" in other_admin.delete(1)["error"]
+    assert other_admin.set_role(1, "user")["error"] == "Not allowed"
+    assert other_admin.delete(1)["error"] == "User not found"
 
-    # With a second admin, the first can be demoted, and set_admin still works.
-    assert admin.set_admin(gina, True)["ok"]
+    # With a second admin, the first can be demoted.
+    assert admin.set_role(gina, "admin")["ok"]
     assert role(db, "gina") == ("admin", 1)
     assert other_admin.set_role(1, "power")["ok"]
     assert role(db, "admin") == ("power", 0)
-    assert other_admin.set_admin(1, True)["ok"]
-    assert other_admin.set_admin(gina, False)["error"].startswith("You cannot")
-    assert admin.set_admin(gina, False)["ok"]
+    assert other_admin.set_role(1, "admin")["ok"]
+    assert other_admin.set_role(gina, "user")["error"].startswith("You cannot")
+    assert admin.set_role(gina, "power")["ok"]
     assert role(db, "gina") == ("power", 0)
 
 
-def test_admin_methods_require_admin():
+def test_method_policies():
     from services.user_service import UserService
 
-    for name in ("list", "create", "delete", "set_role", "set_admin", "reset_password"):
-        policy = getattr(UserService._pytincture_bff_original, name)._bff_policy
-        assert policy["min_role"] == "admin" and policy["roles"] == {"admin"}, name
-        assert "admin_required" not in policy, name
+    original = UserService._pytincture_bff_original
+    assert original.set_role._bff_policy == {"min_role": "admin", "roles": {"admin"}}
+    for name in ("list", "create", "delete", "delete_preview", "reset_password"):
+        policy = getattr(original, name)._bff_policy
+        assert policy == {"min_role": "power", "roles": {"power"}}, name
+    assert not hasattr(original, "set_admin")
 
 
 # --------------------------------------------------------------------------

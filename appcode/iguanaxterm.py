@@ -445,8 +445,11 @@ class IguanaXterm(MainWindow):
 
     async def _load_identity(self) -> None:
         self._me = await UserService().me_async()
-        suffix = " · admin" if self._me.get("is_admin") else ""
+        role = self._me.get("role")
+        suffix = f" · {_ROLE_LABELS[role]}" if role in ("admin", "power") else ""
         self._toolbar.set_text("user", f"{self._me.get('username', '')}{suffix}")
+        # Users can't set anyone up (#35).
+        self._toolbar.set_hidden("users", role not in ("admin", "power"))
         if self._me.get("must_change_password"):
             self._password_nag()
 
@@ -2838,11 +2841,15 @@ class IguanaXterm(MainWindow):
         form.focus_first()
 
     async def _admin_panel(self) -> None:
-        if not self._me.get("is_admin"):
-            self._toast("Administrator access required.", kind="warning")
+        my_role = self._me.get("role")
+        if my_role not in ("admin", "power"):
+            self._toast("Only Admins and Power Users manage accounts.", kind="warning")
             return
+        is_admin = my_role == "admin"
 
-        modal = ModalWindow(ModalConfig(title="Users", width=760, height=560))
+        modal = ModalWindow(ModalConfig(
+            title="Users" if is_admin else "My Users", width=760, height=560,
+        ))
         container = modal.body
         container.innerHTML = (
             f'<div class="ix-admin">'
@@ -2851,51 +2858,82 @@ class IguanaXterm(MainWindow):
             f"</div><style>{_ADMIN_CSS}</style>"
         )
 
+        columns = [
+            ColumnConfig(id="username", header="Username"),
+            ColumnConfig(id="role_label", header="Role", width=110),
+            ColumnConfig(id="session_count", header="Sites", width=70, align="right"),
+            ColumnConfig(id="created_at", header="Created", width=110),
+        ]
+        actions = []
+        if is_admin:
+            # Admins see who made each account; a Power User made them all.
+            columns.insert(2, ColumnConfig(id="created_by_name", header="Created by", width=110))
+            actions += [
+                TableAction(f"role:{key}", f"Make {label}", icon)
+                for key, label, icon in (
+                    ("admin", _ROLE_LABELS["admin"], "mdi-shield-account"),
+                    ("power", _ROLE_LABELS["power"], "mdi-account-cog"),
+                    ("user", _ROLE_LABELS["user"], "mdi-account"),
+                )
+            ]
+        actions += [
+            TableAction("reset", "Reset password", "mdi-lock-reset"),
+            TableAction(separator=True),
+            TableAction("delete", "Delete user", "mdi-delete", danger=True),
+        ]
         table = DataTable(
             DataTableConfig(
-                columns=[
-                    ColumnConfig(id="username", header="Username"),
-                    ColumnConfig(id="role", header="Role", width=110),
-                    ColumnConfig(id="session_count", header="Sessions", width=90, align="right"),
-                    ColumnConfig(id="created_at", header="Created", width=110),
-                ],
+                columns=columns,
                 selection="single",
-                empty_text="No users",
-                context_actions=[
-                    TableAction("toggle_admin", "Toggle admin", "mdi-shield-account"),
-                    TableAction("reset", "Reset password", "mdi-lock-reset"),
-                    TableAction(separator=True),
-                    TableAction("delete", "Delete user", "mdi-delete", danger=True),
-                ],
+                empty_text="No users" if is_admin else "You haven't created any Users yet",
+                context_actions=actions,
             ),
             container=js.document.getElementById("ix-admin-table"),
         )
 
         async def _refresh() -> None:
             users = await UserService().list_async()
-            table.set_rows(
-                [{**user, "role": _ROLE_LABELS.get(user.get("role"), user.get("role", ""))}
-                 for user in users]
+            table.set_rows([
+                {**user, "role_label": _ROLE_LABELS.get(user.get("role"), user.get("role", ""))}
+                for user in users
+            ])
+
+        async def _confirm_delete(service, user_id: int, row: dict) -> bool:
+            preview = await service.delete_preview_async(user_id)
+            if not preview.get("ok"):
+                self._toast(preview.get("error") or "User not found", kind="error")
+                return False
+            name = preview.get("username") or row.get("username")
+            lines = [f"Delete “{name}”?"]
+            sites = preview.get("sites") or 0
+            if sites:
+                lines.append(f"Their {sites} saved site{'s' if sites != 1 else ''} will be deleted.")
+            users = preview.get("users") or 0
+            if users:
+                lines.append(
+                    f"The {users} account{'s' if users != 1 else ''} they created "
+                    f"will move to you."
+                )
+            return await message.confirm(
+                " ".join(lines), title="Delete user", ok_text="Delete", danger=True,
             )
 
         def _on_action(payload: dict) -> None:
             user_id = payload.get("id")
             row = payload.get("row") or {}
-            action = payload.get("action")
+            action = payload.get("action") or ""
 
             async def _run() -> None:
                 service = UserService()
                 if action == "delete":
-                    if not await message.confirm(
-                        f"Delete “{row.get('username')}” and all their saved sessions?",
-                        title="Delete user", ok_text="Delete", danger=True,
-                    ):
+                    if not await _confirm_delete(service, int(user_id), row):
                         return
                     result = await service.delete_async(int(user_id))
-                elif action == "toggle_admin":
-                    result = await service.set_admin_async(
-                        int(user_id), not row.get("is_admin")
-                    )
+                elif action.startswith("role:"):
+                    role = action.split(":", 1)[1]
+                    if role == row.get("role"):
+                        return
+                    result = await service.set_role_async(int(user_id), role)
                 elif action == "reset":
                     new_password = await message.prompt(
                         f"New password for {row.get('username')} (at least 8 characters)",
@@ -2922,16 +2960,21 @@ class IguanaXterm(MainWindow):
 
         table.on_action(_on_action)
 
+        fields = [
+            FieldConfig(id="username", label="New user", required=True),
+            FieldConfig(id="password", label="Password", type="password",
+                        required=True, min_length=8),
+        ]
+        if is_admin:
+            fields.append(FieldConfig(
+                id="role", label="Role", type="select", value="user",
+                options=[SelectOption(key, _ROLE_LABELS[key]) for key in ("user", "power", "admin")],
+            ))
         create_form = Form(
             FormConfig(
-                columns=3,
+                columns=3 if is_admin else 2,
                 submit_text="Add user",
-                fields=[
-                    FieldConfig(id="username", label="New user", required=True),
-                    FieldConfig(id="password", label="Password", type="password",
-                                required=True, min_length=8),
-                    FieldConfig(id="is_admin", label="Administrator", type="checkbox"),
-                ],
+                fields=fields,
             ),
             container=js.document.getElementById("ix-admin-form"),
         )
@@ -2940,7 +2983,7 @@ class IguanaXterm(MainWindow):
             create_form.set_busy(True)
             try:
                 result = await UserService().create_async(
-                    values["username"], values["password"], bool(values.get("is_admin"))
+                    values["username"], values["password"], values.get("role") or "user"
                 )
                 if not result.get("ok"):
                     if result.get("errors"):
@@ -2948,7 +2991,7 @@ class IguanaXterm(MainWindow):
                     else:
                         create_form.set_error(None, result.get("error", "Failed"))
                     return
-                create_form.set_values({"username": "", "password": "", "is_admin": False})
+                create_form.set_values({"username": "", "password": ""})
                 await _refresh()
             finally:
                 create_form.set_busy(False)

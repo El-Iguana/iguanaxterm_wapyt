@@ -178,6 +178,15 @@ docker compose up -d --build
 
 This builds the image and starts the container — named `iguanaxterm`, with
 hostname `iguanaxterm` and the label `app=IguanaXterm` — in the background.
+From 2.4.0 a second container starts with it, `iguanaxterm-guacd`: Apache
+Guacamole's `guacd`, which does the work for RDP (Windows) desktops.
+
+> **guacd has no login of its own.** Anyone who can reach its port can make it
+> connect anywhere, so compose never publishes it: only IguanaXterm reaches
+> it, over compose's private network. With `compose.host-network.yaml` it is
+> started bound to `127.0.0.1`. Don't add a `ports:` entry for it, or bind it
+> to anything else. Without guacd (or with `GANXTERM_GUACD` empty), RDP is
+> simply not offered; everything else works.
 Watch it come up:
 
 ```sh
@@ -288,10 +297,17 @@ compose cannot do this reliably.)
 podman compose down                                  # if it was running
 mkdir -p ~/Downloads/IguanaXterm
 podman build -f Containerfile -t localhost/iguanaxterm:latest .
+# guacd, for RDP desktops: on a private network, never published (section 4)
+podman network create iguanaxterm 2>/dev/null || true
+podman run -d --name iguanaxterm-guacd --network iguanaxterm \
+  --restart unless-stopped --label app=IguanaXterm \
+  docker.io/guacamole/guacd:1.6.0@sha256:8974eaa9ba32f713daf311e7cc8cd7e4cdfba1edea39eed75524e78ef4b08f4f
 podman run -d --name iguanaxterm --hostname iguanaxterm --label app=IguanaXterm \
   --restart unless-stopped \
+  --network iguanaxterm \
   -p 127.0.0.1:8765:8765 \
   --env-file .env \
+  -e GANXTERM_GUACD=iguanaxterm-guacd:4822 \
   --userns=keep-id:uid=10001,gid=999 \
   -e GANXTERM_DOWNLOAD_DIR=/downloads \
   -e GANXTERM_DOWNLOAD_HOST_DIR='~/Downloads/IguanaXterm' \
@@ -342,7 +358,9 @@ docker compose up -d --build
 ```
 
 Use the same compose files you started with: `-f compose.host-network.yaml`,
-or `-f compose.yaml -f compose.downloads.yaml`, after `compose`.
+or `-f compose.yaml -f compose.downloads.yaml`, after `compose`. Updating an
+older install to 2.4.0 this way also creates and starts the guacd container
+for RDP; nothing else to do.
 
 - **Installed from a ZIP:** unzip the new version into a new folder, copy
   your `.env` into it, and run the same command there. The compose project,
@@ -449,6 +467,20 @@ docker run -d --name iguanaxterm --hostname iguanaxterm --label app=IguanaXterm 
   the address the browser uses.
 - **Host networking on Linux**: replace the `-p` and `--add-host` lines with
   `--network host -e GANXTERM_BIND=127.0.0.1`.
+- **RDP desktops** need guacd next to it, never published. On a private
+  network:
+
+  ```sh
+  docker network create iguanaxterm
+  docker run -d --name iguanaxterm-guacd --network iguanaxterm --restart unless-stopped \
+    docker.io/guacamole/guacd:1.6.0@sha256:8974eaa9ba32f713daf311e7cc8cd7e4cdfba1edea39eed75524e78ef4b08f4f
+  ```
+
+  and add `--network iguanaxterm -e GANXTERM_GUACD=iguanaxterm-guacd:4822` to
+  the `docker run` above. With host networking, bind guacd to loopback
+  yourself (its image defaults to `0.0.0.0`):
+  `docker run -d --name iguanaxterm-guacd --network host --entrypoint /opt/guacamole/sbin/guacd docker.io/guacamole/guacd:1.6.0@sha256:8974eaa9ba32f713daf311e7cc8cd7e4cdfba1edea39eed75524e78ef4b08f4f -f -b 127.0.0.1 -l 4822`
+  and `-e GANXTERM_GUACD=127.0.0.1:4822`.
 
 ---
 

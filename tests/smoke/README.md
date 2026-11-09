@@ -72,6 +72,47 @@ with an empty `GANXTERM_DATA_DIR`):
 python3 tests/smoke/site_lists_smoke.py
 ```
 
+## RDP smoke
+
+`rdp_smoke.py` covers RDP desktops (#57-#62) against `Containerfile.rdptarget`:
+xrdp with an Xfce desktop, a terminal opened at login, `xclip`, and `sshd`.
+xrdp listens on 3389 (published) and, through `socat`, on the container's own
+`127.0.0.1:3390`, which only the SSH tunnel can reach. Ctrl+Alt+Del is bound
+to `touch /tmp/cad-pressed`; `/rotate-cert.sh` gives xrdp a new certificate.
+
+```bash
+podman build -t iguanaxterm-rdptest -f tests/smoke/Containerfile.rdptarget tests/smoke
+podman run -d --name ix-rdptest -p 127.0.0.1:3389:3389 -p 127.0.0.1:2224:22 iguanaxterm-rdptest
+# guacd on the host network, loopback only (4823 keeps clear of a dev container's 4822)
+podman run -d --name ix-guacd-test --network host --entrypoint /opt/guacamole/sbin/guacd \
+  docker.io/guacamole/guacd:1.6.0 -f -b 127.0.0.1 -l 4823
+# the app, with a fresh data dir, told where guacd is
+GANXTERM_GUACD=127.0.0.1:4823 GANXTERM_DATA_DIR=/tmp/ixrdp GANXTERM_ADMIN_PASS=testpass123 \
+  PORT=8799 uv run python service.py &
+IX_DATA_DIR=/tmp/ixrdp python3 tests/smoke/rdp_smoke.py
+```
+
+It checks: the desktop draws (real pixels off guacamole's canvases), the
+certificate is pinned, typing and Ctrl+Alt+Del reach the session (marker
+files, via `podman exec`), the remote screen follows a resize, the clipboard
+works both ways, NLA against xrdp is explained as a refused login, the
+tunnel-only port connects through SSH and is pinned too, and a rotated
+certificate is refused until **Forget host key**. `IX_RDP_HOST`,
+`IX_RDP_SSH_HOST` and `IX_RDP_CONTAINER` point it at a target on a
+compose-style network instead; it passed that way too (guacd and the app in
+containers on one network, the target reachable only by name).
+
+The same target drives `tests/test_rdp_live.py` (the relay with no browser),
+which skips unless `IX_GUACD` and `IX_RDP` are set.
+
+Traps: an `xclip` started in the background dies with `podman exec`, and then
+there is nothing for xrdp to copy, so the test keeps `xclip -quiet` running in
+the foreground. A Ctrl+V into the terminal leaves bash in quoted-insert, so the
+next run presses Enter twice before typing.
+
+**xrdp is not Windows.** NLA, the `DOMAIN\user` form and a real Windows
+certificate need checking by hand against a Windows machine.
+
 ## Maximize smoke
 
 `maximize_smoke.py` covers zooming a tile: it fills the workspace, sits on top,

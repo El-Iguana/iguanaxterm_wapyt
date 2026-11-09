@@ -53,6 +53,12 @@ appcode/                # pytincture modules_path
     sftp_service.py     #   BFF: directory ops + the connection pool
     terminal_ws.py      #   WebSocket relay (SSH + Telnet)
     transfer.py         #   plain routes for binary upload/download
+  services/guac.py      #   Guacamole protocol framing (pure) — RDP
+  services/guacd.py     #   GANXTERM_GUACD, status, the guacd handshake
+  services/rdp_ws.py    #   /ws/rdp/<id>: the RDP relay, tunnel listener, cert pin
+  services/rdp_cert.py  #   X.224 + TLS probe for the RDP certificate
+  static/rdp-pane.js    #   IxRDP: guacamole-common-js behind noVNC's RFB surface
+  vendor/guacamole/     #   guacamole-common-js 1.6.0 — served at /guacamole
   vendor/xterm/         #   vendored xterm.js — served at /xterm
   wapyt-99.99.99-*.whl  #   dev wheel the BROWSER installs (not the venv copy)
 tests/                  # CPython unit tests for the pure modules
@@ -443,6 +449,73 @@ module that imports `RFB` and sets `window.IxRFB`.
 - Escape is left to the remote inside `.ix-vnc`, as it is inside a terminal.
   Ctrl+Alt+Del has a header button, because the OS takes it before the page.
 
+### RDP desktops: guacd does RDP, IguanaXterm does the login (2.4.0, #55-#62)
+
+```
+browser (guacamole-common-js) ⇄ /ws/rdp/<id> ⇄ rdp_ws.py ⇄ TCP ⇄ guacd ⇄ RDP server
+```
+
+- **guacd is a sidecar**, `docker.io/guacamole/guacd:1.6.0` pinned by the
+  multi-arch *index* digest (`skopeo inspect … .Digest`, not `podman image
+  inspect`, which gives one platform's). **It has no authentication**, so it
+  is never published: compose puts it on the project network with no
+  `ports:`; host networking (`compose.host-network.yaml`, `podman-run.sh`)
+  overrides the entrypoint to `guacd -f -b 127.0.0.1 -l 4822`, because the
+  image's own entrypoint hard-codes `-b 0.0.0.0`. `GANXTERM_GUACD` unset =
+  RDP off: `SessionService.features()` hides the type, `save` refuses it,
+  `/ws/rdp` is 404. The Windows build has no guacd, so no RDP.
+- **The relay does the handshake itself** (`guacd.handshake`): `select rdp`,
+  read `args`, send `size`/`audio`/`video`/`image`/`timezone`, then `connect`
+  with the values in `args` order (the first `args` element is guacd's
+  version; answer `VERSION_1_5_0`). After `ready` the browser gets
+  `0.,36.<uuid>;` (what `Guacamole.WebSocketTunnel` waits for) and whole
+  instructions both ways. The browser's `select`/`connect` are dropped; its
+  internal `0.,4.ping,…;` is answered by the relay and never reaches guacd.
+  Subprotocol `guacamole`.
+- **Lengths count characters, not bytes**, so the guacd byte stream is
+  decoded incrementally before it is split (`guac.ByteSplitter`); a chunk
+  boundary inside a UTF-8 sequence is normal.
+- **guacd reports some failures after `ready`** (NLA against xrdp: `error
+  "Security negotiation failed…" 769`), so the pump rewrites every `error` into
+  words (`guac.status_message`), not only the handshake's.
+- **Certificates (#61):** `rdp_cert.probe` speaks X.224 Connection Request +
+  RDP_NEG_REQ (TLS|CredSSP), then TLS over a MemoryBIO (so it works on a
+  paramiko channel too) and pins `rdp-sha256:<hex>` in `host_key`. guacd 1.6
+  has `cert-fingerprints`, **measured**: it accepts `sha256:AA:BB:…` (colon hex,
+  either case) and refuses plain hex or a wrong print with 519, and refuses an
+  unpinned self-signed cert with `ignore-cert` false. So guacd enforces the pin
+  too: no `ignore-cert` fallback, no race. `security=rdp` has no certificate.
+  Changing a site's type clears `host_key` (an SSH key is no RDP cert).
+- **Tunnel (#60):** guacd dials its own TCP connection, so the relay opens the
+  SSH client (resolved as the site's owner) and a `_OneShotTunnel`: a listener
+  on `guacd.local_address_towards(guacd host)` (127.0.0.1 with host
+  networking, the container's own address on a compose network), accepting
+  one connection, from guacd's address only, within 15 s. The probe uses its
+  own `direct-tcpip` channel first. Verified on both topologies.
+- **The pane:** `static/rdp-pane.js` defines `IxRDP` with noVNC's RFB surface
+  (`disconnect`, `focus`, `sendCtrlAltDel`, `sendKey`, `clipboardPasteFrom`;
+  events `connect`, `disconnect`, `securityfailure`, `clipboard`), so
+  `_mount_desktop` only branches to construct it and every VNC handler,
+  clipboard path and button is shared. `Guacamole.Keyboard` listens on the
+  `.ix-rdp` element itself (keys only while focused), so the Ctrl+V trick's
+  capture listener sits on its parent, and `pasteShortcut()` sends Ctrl+V as a
+  chord: guacamole did not pass the held Ctrl on, and Windows got a bare `v`.
+  Resize is a 120 ms debounced `sendSize` from a ResizeObserver.
+- **guacamole-common-js 1.6.0 leaks VideoFrames**: with `ImageDecoder`
+  available, `Display.drawStream` decodes with it and never `close()`s the
+  frames, and Chrome logs an error per frame. `IxRDP` hides `ImageDecoder` for
+  the length of each `drawStream` call, so it takes its older Image path, which
+  keeps the drawing order. The relay also stops offering `image/webp`.
+- Vendored per `vendor/guacamole/VERSION`: Maven Central's
+  `guacamole-common-js-1.6.0.zip`, SHA-1 and Apache PGP signature checked,
+  `all.min.js` only, with LICENSE/NOTICE from the 1.6.0 tag. **Keep it on
+  guacd's version.**
+- Tests: `test_guac.py` (framing), `test_rdp.py` (a fake guacd on a socket
+  checks handshake order, the dropped `connect`, error wording, sharing),
+  `test_rdp_live.py` (real guacd + xrdp, skipped without them),
+  `tests/smoke/rdp_smoke.py` (15 checks; see the smoke README). xrdp is not
+  Windows: NLA and real Windows certificates are checked by hand.
+
 ### Folder downloads without a folder picker are saved on the server
 
 Firefox has no File System Access pickers, and no browser offers them on a
@@ -754,6 +827,8 @@ session validator, the terminal relay and the pool's dialler.
 | `telnet` | yes | no | asyncio |
 | `sftp` | no | SFTP | paramiko |
 | `ftp` | no | FTP/FTPS | `services/ftp.py` |
+| `vnc` | desktop | no | `vnc_ws.py` (RFB, in-process) |
+| `rdp` | desktop | no | `rdp_ws.py` → guacd (only with `GANXTERM_GUACD`) |
 
 A files-only pane has no Terminal button and opens on Files. It keeps its
 terminal *panel*, because the Reconnect placeholder lives there; `_connect_pane`

@@ -317,6 +317,17 @@ def set_role(conn: sqlite3.Connection, user_id: int, role: str) -> bool:
     return cursor.rowcount > 0
 
 
+def current_role(conn: sqlite3.Connection, user_id: int) -> str:
+    """
+    The account's role as the database has it now, or "" if it is gone.
+
+    Write paths check this rather than the session's claims, so a demotion
+    takes effect on the next call instead of at the next sign-in.
+    """
+    row = conn.execute("SELECT role FROM users WHERE id = ?", (int(user_id),)).fetchone()
+    return row["role"] if row else ""
+
+
 def admin_count(conn: sqlite3.Connection, excluding: int = 0) -> int:
     """How many Admins there are, not counting ``excluding``."""
     return conn.execute(

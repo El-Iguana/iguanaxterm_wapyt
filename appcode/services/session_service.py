@@ -11,6 +11,13 @@ form; this returns ``has_password`` / ``has_private_key`` /
 :meth:`save` only overwrites a stored secret when a replacement is supplied.
 That also gives "leave unchanged" and "clear it" distinct representations,
 which the original could not express.
+
+**Users can't create, edit or delete sites (#36)**, or clear a pinned host
+key. :meth:`save`, :meth:`delete` and :meth:`clear_host_key` check the
+caller's role in the database, not the session, so this holds for a
+hand-made call from the browser console and for a demotion made a moment
+ago. :meth:`list` marks each site ``editable`` so the UI can hide what the
+server would refuse.
 """
 from __future__ import annotations
 
@@ -19,7 +26,8 @@ from typing import Any, Optional
 from pytincture.dataclass import backend_for_frontend, bff_policy
 
 from services.auth import current_user_id
-from services.db import encrypt, get_db
+from services.db import current_role, encrypt, get_db
+from services.roles import POWER, at_least
 from services.paths import SESSION_TYPES
 
 # Columns that are safe to hand to the browser.
@@ -29,6 +37,8 @@ _PUBLIC_COLUMNS = (
 )
 
 _SENTINEL_UNCHANGED = "\x00unchanged\x00"
+
+_READ_ONLY = "Your account can use sites but not change them"
 
 
 @backend_for_frontend
@@ -47,6 +57,7 @@ class SessionService:
         if not self._user_id:
             return []
         with get_db() as conn:
+            editable = self._can_edit(conn)
             rows = conn.execute(
                 f"SELECT {_PUBLIC_COLUMNS}, "
                 "  (password <> '') AS has_password, "
@@ -64,6 +75,7 @@ class SessionService:
                 "has_private_key": bool(row["has_private_key"]),
                 "has_passphrase": bool(row["has_passphrase"]),
                 "has_host_key": bool(row["has_host_key"]),
+                "editable": editable,
             }
             for row in rows
         ]
@@ -91,16 +103,22 @@ class SessionService:
         }
 
     def folders(self) -> list:
-        """Distinct folder names, for the editor's suggestions."""
+        """Distinct folder names, for the editor's suggestions. None for Users."""
         if not self._user_id:
             return []
         with get_db() as conn:
+            if not self._can_edit(conn):
+                return []
             rows = conn.execute(
                 "SELECT DISTINCT folder FROM sessions "
                 "WHERE user_id = ? AND folder <> '' ORDER BY folder COLLATE NOCASE",
                 (self._user_id,),
             ).fetchall()
         return [row["folder"] for row in rows]
+
+    def _can_edit(self, conn) -> bool:
+        """Power Users and Admins edit their own sites; Users edit none."""
+        return at_least(current_role(conn, self._user_id), POWER)
 
     # ------------------------------------------------------------------
     # Writes
@@ -131,6 +149,9 @@ class SessionService:
         """
         if not self._user_id:
             return {"ok": False, "error": "Not authenticated"}
+        with get_db() as conn:
+            if not self._can_edit(conn):
+                return {"ok": False, "error": _READ_ONLY}
 
         errors = self._validate(name, host, port, session_type)
         if errors:
@@ -226,6 +247,8 @@ class SessionService:
         if not self._user_id:
             return {"ok": False, "error": "Not authenticated"}
         with get_db() as conn:
+            if not self._can_edit(conn):
+                return {"ok": False, "error": _READ_ONLY}
             cursor = conn.execute(
                 "DELETE FROM sessions WHERE id = ? AND user_id = ?",
                 (int(session_id), self._user_id),
@@ -249,6 +272,8 @@ class SessionService:
         if not self._user_id:
             return {"ok": False, "error": "Not authenticated"}
         with get_db() as conn:
+            if not self._can_edit(conn):
+                return {"ok": False, "error": _READ_ONLY}
             conn.execute(
                 "UPDATE sessions SET host_key = '' WHERE id = ? AND user_id = ?",
                 (int(session_id), self._user_id),

@@ -294,9 +294,14 @@ class IguanaXterm(MainWindow):
                     TreeAction("connect", "Connect", "mdi-connection", scope="leaf"),
                     TreeAction("sftp", "Browse files", "mdi-folder-network", scope="leaf"),
                     TreeAction(separator=True),
-                    TreeAction("edit", "Edit", "mdi-pencil", scope="leaf"),
-                    TreeAction("forget_key", "Forget host key", "mdi-key-remove", scope="leaf"),
-                    TreeAction("delete", "Delete", "mdi-delete", scope="leaf", danger=True),
+                    # Only on sites this account may change (#36): the server
+                    # marks them, and refuses the rest anyway.
+                    TreeAction("edit", "Edit", "mdi-pencil", scope="leaf",
+                               requires=["editable"]),
+                    TreeAction("forget_key", "Forget host key", "mdi-key-remove", scope="leaf",
+                               requires=["editable"]),
+                    TreeAction("delete", "Delete", "mdi-delete", scope="leaf", danger=True,
+                               requires=["editable"]),
                 ],
             ),
             root="#ix-tree-host",
@@ -448,8 +453,14 @@ class IguanaXterm(MainWindow):
         role = self._me.get("role")
         suffix = f" · {_ROLE_LABELS[role]}" if role in ("admin", "power") else ""
         self._toolbar.set_text("user", f"{self._me.get('username', '')}{suffix}")
-        # Users can't set anyone up (#35).
-        self._toolbar.set_hidden("users", role not in ("admin", "power"))
+        # Users can't set anyone up (#35) or change sites (#36).
+        can_manage = role in ("admin", "power")
+        for button in ("users", "new", "edit", "delete"):
+            self._toolbar.set_hidden(button, not can_manage)
+        if not can_manage:
+            self.tree.set_empty_text(
+                "No sites have been shared with you yet.\nAsk your administrator."
+            )
         if self._me.get("must_change_password"):
             self._password_nag()
 
@@ -585,6 +596,7 @@ class IguanaXterm(MainWindow):
                     label=session["name"],
                     icon=session_icon(session.get("type", "ssh")),
                     tooltip=self._session_tooltip(session),
+                    data={"flags": ["editable"] if session.get("editable") else []},
                 )
                 for session in folders[folder]
             ]
@@ -2786,7 +2798,10 @@ class IguanaXterm(MainWindow):
         await self._reload_sessions()
 
     async def _forget_host_key(self, session_id: int) -> None:
-        await SessionService().clear_host_key_async(session_id)
+        result = await SessionService().clear_host_key_async(session_id)
+        if not result.get("ok"):
+            self._toast(result.get("error", "Could not clear the host key"), kind="error")
+            return
         self._toast("Host key cleared; it will be re-pinned on next connect.", kind="success")
         await self._reload_sessions()
 

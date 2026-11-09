@@ -135,11 +135,23 @@ class UserService:
                 f"{where}GROUP BY u.id ORDER BY u.username COLLATE NOCASE",
                 params,
             ).fetchall()
+            # Which of the caller's site lists each account has (#40).
+            list_where = "" if caller == ADMIN else "WHERE l.owner_id = ? "
+            list_params = () if caller == ADMIN else (self._user_id,)
+            memberships: dict = {}
+            for member in conn.execute(
+                "SELECT m.user_id, l.name FROM site_list_members m "
+                f"JOIN site_lists l ON l.id = m.list_id {list_where}"
+                "ORDER BY l.name COLLATE NOCASE",
+                list_params,
+            ):
+                memberships.setdefault(member["user_id"], []).append(member["name"])
         return [
             {
                 "id": row["id"],
                 "username": row["username"],
                 "role": row["role"],
+                "lists": memberships.get(row["id"], []),
                 "created_by": row["created_by"],
                 "created_by_name": row["created_by_name"] or "",
                 "created_at": (row["created_at"] or "")[:10],
@@ -195,13 +207,18 @@ class UserService:
             users = conn.execute(
                 "SELECT COUNT(*) FROM users WHERE created_by = ?", (row["id"],)
             ).fetchone()[0]
+            lists = conn.execute(
+                "SELECT COUNT(*) FROM site_lists WHERE owner_id = ?", (row["id"],)
+            ).fetchone()[0]
         return {
             "ok": True,
             "username": row["username"],
             "role": row["role"],
             "sites": sites,
-            # Accounts this one created; they move to whoever deletes it.
+            # Accounts and site lists this one created; they move to whoever
+            # deletes it.
             "users": users,
+            "lists": lists,
         }
 
     @bff_policy(min_role="power", roles={"power"})
@@ -222,6 +239,12 @@ class UserService:
             conn.execute(
                 "UPDATE users SET created_by = ? WHERE created_by = ?", (self._user_id, target)
             )
+            # Their site lists too, so the people assigned them keep the
+            # sites that are still there (the deleted account's own sites go
+            # with it, and drop out of every list).
+            conn.execute(
+                "UPDATE site_lists SET owner_id = ? WHERE owner_id = ?", (self._user_id, target)
+            )
             # Drop any pooled SFTP connections before the rows go away.
             session_ids = [
                 r["id"]
@@ -231,10 +254,14 @@ class UserService:
             ]
             conn.execute("DELETE FROM users WHERE id = ?", (target,))
 
-        from services.sftp_service import sftp_pool
+        from services.live import recheck
+        from services.pool import sftp_pool, transfer_pool
 
         for session_id in session_ids:
             sftp_pool.close(session_id)
+            transfer_pool.close(session_id)
+        # Their own open terminals and anything on their sites (#41).
+        recheck()
         return {"ok": True}
 
     @bff_policy(min_role="admin", roles={"admin"})
@@ -251,6 +278,9 @@ class UserService:
                 return {"ok": False, "error": "That is the last administrator"}
             if not set_role(conn, target, role):
                 return {"ok": False, "error": "User not found"}
+        from services.live import recheck
+
+        recheck()
         return {"ok": True}
 
     @bff_policy(min_role="power", roles={"power"})

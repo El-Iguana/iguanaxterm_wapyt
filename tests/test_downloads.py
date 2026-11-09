@@ -68,7 +68,7 @@ def ftp_profile(tmp_path, monkeypatch):
     thread.start()
     profile = {"id": 9, "type": "ftp", "host": "127.0.0.1", "port": server.address[1],
                "username": "u", "password": "p", "host_key": ""}
-    monkeypatch.setattr(download_jobs, "fetch_session", lambda sid, uid: profile)
+    monkeypatch.setattr(download_jobs, "resolve_files", lambda sid, uid: (profile, ""))
     yield remote
     from services.pool import transfer_pool
 
@@ -151,7 +151,7 @@ def fake_pool(monkeypatch):
 
     state = {"sftp": _FakeSFTP()}
     monkeypatch.setattr(transfer.transfer_pool, "acquire", lambda *a: _Conn(state["sftp"]))
-    monkeypatch.setattr(download_jobs, "fetch_session", lambda sid, uid: {"id": sid})
+    monkeypatch.setattr(download_jobs, "resolve_files", lambda sid, uid: ({"id": sid}, ""))
     return state
 
 

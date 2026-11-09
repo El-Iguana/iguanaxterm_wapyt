@@ -84,7 +84,10 @@ def test_a_bad_key_is_still_a_format_error_with_a_passphrase():
 # -- storing it -------------------------------------------------------------------
 
 def test_the_passphrase_is_encrypted_at_rest_and_decrypted_to_connect(db):
-    from services.db import fetch_session
+    from services.access import resolve_site
+
+    def fetch_session(sid, uid):
+        return resolve_site(sid, uid)[0]
 
     db.init_db()
     pem = encrypted_key()
@@ -106,7 +109,10 @@ def test_the_browser_only_learns_that_there_is_one(db):
 
 
 def test_saving_other_fields_keeps_it(db):
-    from services.db import fetch_session
+    from services.access import resolve_site
+
+    def fetch_session(sid, uid):
+        return resolve_site(sid, uid)[0]
 
     db.init_db()
     session_id = new_session(private_key=encrypted_key(), passphrase=PASSPHRASE)
@@ -115,7 +121,10 @@ def test_saving_other_fields_keeps_it(db):
 
 
 def test_a_new_key_drops_the_old_passphrase_unless_it_brings_one(db):
-    from services.db import fetch_session
+    from services.access import resolve_site
+
+    def fetch_session(sid, uid):
+        return resolve_site(sid, uid)[0]
 
     db.init_db()
     session_id = new_session(private_key=encrypted_key(), passphrase=PASSPHRASE)
@@ -129,7 +138,10 @@ def test_a_new_key_drops_the_old_passphrase_unless_it_brings_one(db):
 
 
 def test_clearing_the_key_clears_the_passphrase(db):
-    from services.db import fetch_session
+    from services.access import resolve_site
+
+    def fetch_session(sid, uid):
+        return resolve_site(sid, uid)[0]
 
     db.init_db()
     session_id = new_session(private_key=encrypted_key(), passphrase=PASSPHRASE)

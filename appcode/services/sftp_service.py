@@ -18,7 +18,7 @@ from pytincture.dataclass import backend_for_frontend, bff_policy, bff_stream
 from services import ftp as ftp_helpers
 from services import ssh as ssh_helpers
 from services.auth import current_user_id
-from services.db import fetch_session
+from services.access import SHARED_HOST_KEY_CHANGED, resolve_files
 from services.paths import file_icon, format_mode, format_mtime, format_size, is_safe_name
 
 # The pools live in a plain module: this one is re-executed on every BFF call,
@@ -69,9 +69,21 @@ class SFTPService:
     # ------------------------------------------------------------------
 
     def _session(self, session_id: int) -> Optional[dict]:
+        """
+        The profile if this person may browse its files, else None (#38):
+        their own site, or one assigned through a list that allows files.
+        """
         if not self._user_id:
             return None
-        return fetch_session(int(session_id), self._user_id)
+        profile, _reason = resolve_files(int(session_id), self._user_id)
+        return profile
+
+    def _host_key_error(self, session_id: int, exc: Exception) -> str:
+        """The owner gets the full message; someone using a shared site, the short one."""
+        profile = self._session(session_id)
+        if profile is not None and profile.get("user_id") == self._user_id:
+            return str(exc)
+        return SHARED_HOST_KEY_CHANGED
 
     def _run(self, session_id: int, work: Callable[[paramiko.SFTPClient], Any]) -> Any:
         """
@@ -82,9 +94,11 @@ class SFTPService:
         correct and needs no executor of our own. It also keeps the browser API
         uniform — every non-streaming call is ``await service.method_async()``.
         """
-        session = self._session(session_id)
-        if session is None:
+        if not self._user_id:
             raise PermissionError("Session not found")
+        session, reason = resolve_files(int(session_id), self._user_id)
+        if session is None:
+            raise PermissionError(reason)
         conn = sftp_pool.acquire(self._user_id, int(session_id), session)
         with conn.lock:
             conn.last_used = time.monotonic()
@@ -110,8 +124,8 @@ class SFTPService:
         except PermissionError as exc:
             return {"ok": False, "error": str(exc), "entries": [], "path": path}
         except ssh_helpers.HostKeyChanged as exc:
-            return {"ok": False, "error": str(exc), "host_key_changed": True,
-                    "entries": [], "path": path}
+            return {"ok": False, "error": self._host_key_error(session_id, exc),
+                    "host_key_changed": True, "entries": [], "path": path}
         except (ssh_helpers.SSHUnavailable, ftp_helpers.FTPUnavailable) as exc:
             return {"ok": False, "error": str(exc), "retryable": True,
                     "entries": [], "path": path}
@@ -228,7 +242,8 @@ class SFTPService:
         try:
             return self._run(session_id, work)
         except ssh_helpers.HostKeyChanged as exc:
-            return {"ok": False, "error": str(exc), "host_key_changed": True}
+            return {"ok": False, "error": self._host_key_error(session_id, exc),
+                    "host_key_changed": True}
         except (ssh_helpers.SSHUnavailable, ftp_helpers.FTPUnavailable) as exc:
             # Already phrased for a person; paramiko's own text is not.
             return {"ok": False, "error": str(exc), "retryable": True}

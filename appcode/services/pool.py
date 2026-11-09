@@ -23,7 +23,7 @@ import paramiko
 
 from services import ftp as ftp_helpers
 from services import ssh as ssh_helpers
-from services.db import get_db
+from services.access import pin_host_key
 
 
 # SFTP calls are blocking; they run here rather than on the event loop.
@@ -50,14 +50,13 @@ class SFTPPool:
     """
     One live SFTP channel per saved session, reused across calls.
 
-    Keyed by ``(user_id, session_id)``. The session id alone would be enough
-    today because every lookup is already ownership-scoped, but keying on both
-    means a future unscoped read cannot hand one user another's open channel.
+    Keyed by ``(user_id, session_id)``. With site lists (#37) several people
+    can open one site, and each gets their own channel: two people never share
+    a connection, so one person's revoked access closes only theirs.
     """
 
     def __init__(self) -> None:
         self._connections: dict[tuple[int, int], _PooledConnection] = {}
-        self._keys: dict[int, tuple[int, int]] = {}
         # How many open panes still want each connection. A session can be open
         # in several panes at once, and the first one closed must not pull the
         # channel out from under the others.
@@ -86,7 +85,6 @@ class SFTPPool:
         ]
         for key in stale:
             conn = self._connections.pop(key, None)
-            self._keys.pop(key[1], None)
             self._dialing.pop(key, None)
             # A browser that was closed or crashed never released its hold, so
             # idle eviction is what stops a stale refcount pinning a channel
@@ -135,7 +133,6 @@ class SFTPPool:
             conn = _PooledConnection(client, client.open_sftp())
             with self._guard:
                 self._connections[key] = conn
-                self._keys[session_id] = key
             return conn
 
     def retain(self, user_id: int, session_id: int) -> int:
@@ -162,7 +159,6 @@ class SFTPPool:
                 return remaining
             self._refs.pop(key, None)
             conn = self._connections.pop(key, None)
-            self._keys.pop(key[1], None)
             self._dialing.pop(key, None)
         if conn is not None:
             try:
@@ -200,27 +196,40 @@ class SFTPPool:
 
     def close(self, session_id: int) -> None:
         """
-        Force the channel shut whatever is holding it.
+        Force every channel to a site shut, whoever holds it.
 
         Deleting a session or a user must not leave a live channel to it, so
-        this ignores refcounts rather than waiting them out.
+        this ignores refcounts rather than waiting them out. A shared site can
+        be open for several people at once, and this closes all of them.
         """
         with self._guard:
-            key = self._keys.pop(int(session_id), None)
-            if key:
-                self._refs.pop(key, None)
-            conn = self._connections.pop(key, None) if key else None
+            keys = [key for key in self._connections if key[1] == int(session_id)]
+            keys += [key for key in self._refs if key[1] == int(session_id) and key not in keys]
+        for user_id, sid in keys:
+            self.close_for(user_id, sid)
+
+    def close_for(self, user_id: int, session_id: int) -> None:
+        """Force one person's channel to one site shut (their access was taken away)."""
+        key = (int(user_id), int(session_id))
+        with self._guard:
+            self._refs.pop(key, None)
+            self._dialing.pop(key, None)
+            conn = self._connections.pop(key, None)
         if conn is not None:
             try:
                 conn.client.close()
             except Exception:
                 pass
 
+    def keys(self) -> list:
+        """The ``(user_id, session_id)`` pairs with a pooled channel, for live.recheck."""
+        with self._guard:
+            return list(self._connections)
+
     def close_all(self) -> None:
         with self._guard:
             connections = list(self._connections.values())
             self._connections.clear()
-            self._keys.clear()
             self._refs.clear()
         for conn in connections:
             try:
@@ -240,28 +249,10 @@ def _dial(session: dict, session_id: int, user_id: int):
     so nothing past this point needs to know which one it got.
     """
     if session.get("type") == "ftp":
-        return ftp_helpers.connect(
-            session, on_learn_host_key=_persist_host_key(session_id, user_id)
-        )
+        return ftp_helpers.connect(session, on_learn_host_key=pin_host_key(session_id))
     if session.get("type") in ("telnet", "vnc"):
         raise PermissionError("This connection has no file browser")
-    return ssh_helpers.connect(
-        session, on_learn_host_key=_persist_host_key(session_id, user_id)
-    )
-
-
-def _persist_host_key(session_id: int, user_id: int) -> Callable[[str], None]:
-    """Record a first-seen host key on the owning profile."""
-
-    def _store(serialized: str) -> None:
-        with get_db() as conn:
-            conn.execute(
-                "UPDATE sessions SET host_key = ? "
-                "WHERE id = ? AND user_id = ? AND host_key = ''",
-                (serialized, session_id, user_id),
-            )
-
-    return _store
+    return ssh_helpers.connect(session, on_learn_host_key=pin_host_key(session_id))
 
 
 # Transfers run on their own pool: a queued folder download holds one channel

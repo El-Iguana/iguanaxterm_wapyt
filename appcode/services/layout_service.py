@@ -13,6 +13,7 @@ from typing import Any
 
 from pytincture.dataclass import backend_for_frontend, bff_policy
 
+from services.access import reachable_site_ids
 from services.auth import current_user_id
 from services.db import get_db
 
@@ -45,12 +46,9 @@ class LayoutService:
             row = conn.execute(
                 "SELECT payload FROM layouts WHERE user_id = ?", (self._user_id,)
             ).fetchone()
-            owned = {
-                int(r[0])
-                for r in conn.execute(
-                    "SELECT id FROM sessions WHERE user_id = ?", (self._user_id,)
-                )
-            }
+            # Sites this person may still open, their own or assigned
+            # through a list (#38); a revoked one doesn't come back.
+            owned = reachable_site_ids(conn, self._user_id)
 
         if row is None or not row[0]:
             return {"ok": True, "mode": "tabbed", "panes": []}

@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import Optional
 
 from services.auth import current_user_id
-from services.db import DATA_DIR, fetch_session
+from services.access import resolve_files
+from services.db import DATA_DIR
 from services.paths import LocalNames, is_safe_name, windows_safe_name
 
 # The downloads folder is on this machine's disk. On a native Windows install
@@ -136,6 +137,8 @@ class _Job:
         self.current = ""
         self.failed: list[dict] = []
         self.cancel = threading.Event()
+        self.revoked = ""               # why access was taken away, if it was (#41)
+        self.live_token = 0
         self.finished_at: Optional[float] = None
         self.shown_root = shown_root  # the user's folder as the person sees it
 
@@ -240,7 +243,10 @@ def _run(job: _Job, profile: dict) -> None:
                 job.failed.append({"path": relative, "error": str(exc)})
 
         job.current = ""
-        if job.cancel.is_set():
+        if job.revoked:
+            job.state = "failed"
+            job.error = job.revoked
+        elif job.cancel.is_set():
             job.state = "cancelled"
         elif job.failed and not job.files_done:
             job.state = "failed"
@@ -251,14 +257,22 @@ def _run(job: _Job, profile: dict) -> None:
         job.state = "failed"
         job.error = str(exc)
     finally:
+        if job.revoked:
+            job.state = "failed"
+            job.error = job.revoked
+        if job.live_token:
+            from services import live
+
+            live.unregister(job.live_token)
         job.finished_at = time.monotonic()
 
 
 def start_job(user: dict, session_id: int, remote: str) -> _Job:
     user_id = current_user_id(user)
-    profile = fetch_session(int(session_id), user_id)
+    # The one access check (#38), with the list's file permission.
+    profile, reason = resolve_files(int(session_id), user_id)
     if profile is None:
-        raise PermissionError("Session not found")
+        raise PermissionError(reason)
     name = posixpath.basename(remote.rstrip("/")) or "download"
     if not is_safe_name(name):
         raise ValueError("That folder name cannot be saved")
@@ -269,6 +283,14 @@ def start_job(user: dict, session_id: int, remote: str) -> _Job:
                shown_root=f"{display_root()}/{user_dir_name(user)}")
     with _jobs_lock:
         _jobs[job.id] = job
+
+    def _revoke(reason: str) -> None:
+        job.revoked = reason
+        job.cancel.set()
+
+    from services import live
+
+    job.live_token = live.register(user_id, int(session_id), "job", _revoke)
     threading.Thread(target=_run, args=(job, profile), daemon=True,
                      name=f"server-download-{job.id[:8]}").start()
     return job

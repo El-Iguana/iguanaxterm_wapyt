@@ -30,9 +30,9 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from services import rfb
 from services import ssh as ssh_helpers
 from services.auth import current_user_id
-from services.db import fetch_session
+from services import live
+from services.access import host_key_message, pin_host_key, resolve_site
 from services.paths import session_caps
-from services.pool import _persist_host_key
 from services.terminal_ws import CLOSE_FORBIDDEN, CLOSE_NOT_FOUND, CLOSE_UNAUTHENTICATED, _same_origin
 
 logger = logging.getLogger("iguanaxterm.vnc")
@@ -59,8 +59,14 @@ class _Target:
                 pass
 
 
-def open_target(profile: dict, user_id: int) -> _Target:
-    """Connect to the VNC server, directly or through the chosen SSH session."""
+def open_target(profile: dict) -> _Target:
+    """
+    Connect to the VNC server, directly or through the chosen SSH session.
+
+    The tunnel is resolved as the desktop's **owner**, not the person
+    connecting: someone using a shared desktop doesn't need the tunnel site
+    assigned, and never sees it (#38).
+    """
     host = profile.get("host") or "localhost"
     port = int(profile.get("port") or 5900)
     via = int(profile.get("via_session_id") or 0)
@@ -73,12 +79,11 @@ def open_target(profile: dict, user_id: int) -> _Target:
         sock.settimeout(_CONNECT_TIMEOUT)
         return _Target(sock)
 
-    tunnel = fetch_session(via, user_id)
+    resolved = resolve_site(via, int(profile["user_id"]))
+    tunnel = resolved[0] if resolved else None
     if tunnel is None or not session_caps(tunnel.get("type")).get("tunnel"):
         raise rfb.RFBError("The SSH session this desktop tunnels through no longer exists")
-    client = ssh_helpers.connect(
-        tunnel, on_learn_host_key=_persist_host_key(via, user_id)
-    )
+    client = ssh_helpers.connect(tunnel, on_learn_host_key=pin_host_key(via))
     try:
         channel = client.get_transport().open_channel(
             "direct-tcpip", (host, port), ("127.0.0.1", 0), timeout=_CONNECT_TIMEOUT
@@ -118,10 +123,12 @@ async def desktop(websocket: WebSocket, session_id: int) -> None:
     if not user_id:
         await websocket.close(code=CLOSE_UNAUTHENTICATED)
         return
-    profile = fetch_session(int(session_id), user_id)
-    if profile is None or not session_caps(profile.get("type")).get("desktop"):
+    # The one access check (#38): owned, or assigned through a site list.
+    resolved = resolve_site(int(session_id), user_id)
+    if resolved is None or not session_caps(resolved[0].get("type")).get("desktop"):
         await websocket.close(code=CLOSE_NOT_FOUND)
         return
+    profile, access = resolved
 
     # noVNC asks for the "binary" subprotocol; a server that does not echo it
     # back makes the browser drop the socket.
@@ -132,7 +139,7 @@ async def desktop(websocket: WebSocket, session_id: int) -> None:
     target: Optional[_Target] = None
 
     def _login() -> _Target:
-        opened = open_target(profile, user_id)
+        opened = open_target(profile)
         try:
             rfb.server_handshake(opened.stream, profile.get("password") or "")
         except BaseException:
@@ -148,7 +155,11 @@ async def desktop(websocket: WebSocket, session_id: int) -> None:
         await inbox.read(12)
         try:
             target = await loop.run_in_executor(None, _login)
-        except (rfb.RFBError, ssh_helpers.HostKeyChanged, ssh_helpers.SSHUnavailable) as exc:
+        except ssh_helpers.HostKeyChanged as exc:
+            await websocket.send_bytes(rfb.refuse(host_key_message(exc, access)))
+            await websocket.close()
+            return
+        except (rfb.RFBError, ssh_helpers.SSHUnavailable) as exc:
             await websocket.send_bytes(rfb.refuse(str(exc)))
             await websocket.close()
             return
@@ -183,6 +194,19 @@ async def desktop(websocket: WebSocket, session_id: int) -> None:
     pump = threading.Thread(target=_pump, name="vnc-pump", daemon=True)
     pump.start()
 
+    async def _revoke(reason: str) -> None:
+        # After the handshake RFB has no way to show a message, so the reason
+        # rides the close frame; the page looks it up (#41).
+        try:
+            await websocket.close(code=CLOSE_FORBIDDEN, reason=reason[:120])
+        except Exception:
+            pass
+
+    token = live.register(
+        user_id, int(session_id), "desktop",
+        lambda reason: asyncio.run_coroutine_threadsafe(_revoke(reason), loop),
+    )
+
     try:
         if inbox.buffer:   # anything noVNC sent right behind its security choice
             await loop.run_in_executor(None, target.stream.sendall, inbox.buffer)
@@ -194,5 +218,6 @@ async def desktop(websocket: WebSocket, session_id: int) -> None:
     except Exception as exc:
         logger.debug("vnc relay ended: %s", exc)
     finally:
+        live.unregister(token)
         stop.set()
         target.close()

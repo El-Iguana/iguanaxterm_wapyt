@@ -100,8 +100,10 @@ def test_a_22x_database_keeps_admins_and_makes_everyone_else_a_power_user(db):
     assert role(db, "admin") == ("admin", 1)
     assert role(db, "carol") == ("power", 0)
     # Carol's site is untouched and still hers.
-    site = db.fetch_session(1, 2)
-    assert site and site["host"] == "box.lan"
+    from services.access import resolve_site
+
+    site, access = resolve_site(1, 2)
+    assert site["host"] == "box.lan" and access["via"] == "owner"
     # A second start changes nothing.
     db.init_db()
     assert role(db, "carol") == ("power", 0)

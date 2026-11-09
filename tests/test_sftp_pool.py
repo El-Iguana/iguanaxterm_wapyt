@@ -53,7 +53,6 @@ def _seed(pool, user_id=1, session_id=7):
     conn = _PooledConnection(client, sftp=object())
     key = (user_id, session_id)
     pool._connections[key] = conn
-    pool._keys[session_id] = key
     return client, key
 
 
@@ -170,3 +169,22 @@ def test_discard_drops_only_the_connection_it_was_given(pool, monkeypatch):
     assert newer.client.closed == 0, "closed before the grace period"
     time.sleep(0.2)
     assert newer.client.closed == 1
+
+
+def test_close_shuts_every_persons_channel_to_a_shared_site(pool):
+    # Site lists (#37): two people on one site each have their own channel.
+    first, _ = _seed(pool, user_id=1, session_id=7)
+    second, _ = _seed(pool, user_id=2, session_id=7)
+    other, other_key = _seed(pool, user_id=2, session_id=8)
+    pool.close(7)
+    assert (first.closed, second.closed, other.closed) == (1, 1, 0)
+    assert pool.keys() == [other_key]
+
+
+def test_close_for_shuts_only_that_persons_channel(pool):
+    mine, _ = _seed(pool, user_id=1, session_id=7)
+    theirs, theirs_key = _seed(pool, user_id=2, session_id=7)
+    pool.retain(1, 7)
+    pool.close_for(1, 7)
+    assert (mine.closed, theirs.closed) == (1, 0)
+    assert pool.keys() == [theirs_key]

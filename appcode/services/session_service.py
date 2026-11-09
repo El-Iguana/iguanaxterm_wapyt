@@ -1,8 +1,9 @@
 """
 BFF: saved connection profiles.
 
-Every query is scoped by the caller's own ``user_id``. There is no unscoped
-read of the ``sessions`` table anywhere in the app.
+Writes are scoped by the caller's own ``user_id``. :meth:`list` adds the
+sites shared with the caller through site lists (#39), read-only and without
+credentials. Opening a site is ``services/access.py``'s job, not this one's.
 
 Credentials never travel back to the browser. The original shipped the
 decrypted password and private key to the client purely to prefill the edit
@@ -27,8 +28,8 @@ from pytincture.dataclass import backend_for_frontend, bff_policy
 
 from services.auth import current_user_id
 from services.db import current_role, encrypt, get_db
-from services.roles import POWER, at_least
-from services.paths import SESSION_TYPES
+from services.roles import ADMIN, POWER, at_least
+from services.paths import SESSION_TYPES, session_caps
 
 # Columns that are safe to hand to the browser.
 _PUBLIC_COLUMNS = (
@@ -53,11 +54,20 @@ class SessionService:
     # ------------------------------------------------------------------
 
     def list(self) -> list:
-        """Every profile the caller owns, ordered for the sidebar tree."""
+        """
+        Every site the caller may open, ordered for the sidebar tree: their
+        own first, then the ones shared with them through site lists (#39).
+
+        Each row says what the UI may offer: ``editable`` (Edit, Delete),
+        ``can_forget`` (Forget host key) and ``files`` (the file browser).
+        A shared row carries ``shared``, ``list_name`` and ``owner``, and never
+        a credential or the owner's tunnel site.
+        """
         if not self._user_id:
             return []
         with get_db() as conn:
-            editable = self._can_edit(conn)
+            role = current_role(conn, self._user_id)
+            editable = at_least(role, POWER)
             rows = conn.execute(
                 f"SELECT {_PUBLIC_COLUMNS}, "
                 "  (password <> '') AS has_password, "
@@ -68,7 +78,27 @@ class SessionService:
                 "ORDER BY folder COLLATE NOCASE, name COLLATE NOCASE",
                 (self._user_id,),
             ).fetchall()
-        return [
+            # A site in several of the caller's lists shows once, under the
+            # first list by name, with files if any of those lists allows them.
+            # A site the caller owns shows once, as their own.
+            shared = conn.execute(
+                "SELECT s.id, s.user_id, s.name, s.folder, s.type, s.host, s.port, "
+                "       s.username, s.description, s.created_at, "
+                "       (s.host_key <> '') AS has_host_key, "
+                "       MIN(l.name COLLATE NOCASE) AS list_name, "
+                "       MAX(l.allow_files) AS allow_files, "
+                "       o.username AS owner "
+                "FROM site_list_members m "
+                "JOIN site_lists l ON l.id = m.list_id "
+                "JOIN site_list_items i ON i.list_id = l.id "
+                "JOIN sessions s ON s.id = i.session_id "
+                "JOIN users o ON o.id = s.user_id "
+                "WHERE m.user_id = ? AND s.user_id <> ? "
+                "GROUP BY s.id "
+                "ORDER BY list_name COLLATE NOCASE, s.name COLLATE NOCASE",
+                (self._user_id, self._user_id),
+            ).fetchall()
+        own = [
             {
                 **dict(row),
                 "has_password": bool(row["has_password"]),
@@ -76,9 +106,37 @@ class SessionService:
                 "has_passphrase": bool(row["has_passphrase"]),
                 "has_host_key": bool(row["has_host_key"]),
                 "editable": editable,
+                "can_forget": editable,
+                "files": bool(session_caps(row["type"])["files"]),
+                "shared": False,
             }
             for row in rows
         ]
+        assigned = [
+            {
+                "id": row["id"],
+                "user_id": row["user_id"],
+                "name": row["name"],
+                "folder": row["folder"],
+                "type": row["type"],
+                "host": row["host"],
+                "port": row["port"],
+                "username": row["username"],
+                "description": row["description"],
+                "created_at": row["created_at"],
+                "via_session_id": 0,
+                "has_host_key": bool(row["has_host_key"]),
+                "editable": False,
+                # Only the owner or an Admin clears a shared site's pin.
+                "can_forget": role == ADMIN,
+                "files": bool(row["allow_files"]) and bool(session_caps(row["type"])["files"]),
+                "shared": True,
+                "list_name": row["list_name"],
+                "owner": row["owner"],
+            }
+            for row in shared
+        ]
+        return own + assigned
 
     def get(self, session_id: int) -> dict:
         """One profile, without its secrets — enough to prefill the editor."""
@@ -260,6 +318,10 @@ class SessionService:
 
         sftp_pool.close(int(session_id))
         transfer_pool.close(int(session_id))
+        # Anyone it was shared with loses their open terminal or desktop too.
+        from services.live import recheck
+
+        recheck()
         return {"ok": True}
 
     def clear_host_key(self, session_id: int) -> dict:
@@ -274,10 +336,20 @@ class SessionService:
         with get_db() as conn:
             if not self._can_edit(conn):
                 return {"ok": False, "error": _READ_ONLY}
-            conn.execute(
-                "UPDATE sessions SET host_key = '' WHERE id = ? AND user_id = ?",
-                (int(session_id), self._user_id),
-            )
+            # The owner clears their own site's pin. An Admin may clear any
+            # site's, since a changed key on a shared site blocks everyone
+            # who uses it (#38).
+            if current_role(conn, self._user_id) == ADMIN:
+                cursor = conn.execute(
+                    "UPDATE sessions SET host_key = '' WHERE id = ?", (int(session_id),)
+                )
+            else:
+                cursor = conn.execute(
+                    "UPDATE sessions SET host_key = '' WHERE id = ? AND user_id = ?",
+                    (int(session_id), self._user_id),
+                )
+        if cursor.rowcount == 0:
+            return {"ok": False, "error": "Session not found"}
         return {"ok": True}
 
     # ------------------------------------------------------------------

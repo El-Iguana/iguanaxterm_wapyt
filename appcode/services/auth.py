@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import Any, Mapping, Optional
 
 from services.db import get_db, verify_password
+from services.roles import ADMIN, at_least, is_role, role_of, roles_claim
 
 
 def authenticate(email: str, password: str, request: Any = None) -> Optional[dict]:
@@ -44,7 +45,7 @@ def authenticate(email: str, password: str, request: Any = None) -> Optional[dic
 
     with get_db() as conn:
         row = conn.execute(
-            "SELECT id, username, pw_hash, is_admin FROM users WHERE username = ?",
+            "SELECT id, username, pw_hash, role FROM users WHERE username = ?",
             (username,),
         ).fetchone()
 
@@ -57,14 +58,17 @@ def authenticate(email: str, password: str, request: Any = None) -> Optional[dic
     if not verify_password(password, row["pw_hash"]):
         return None
 
-    is_admin = bool(row["is_admin"])
+    role = row["role"]
     return {
         "user_id": row["id"],
         "username": row["username"],
-        "is_admin": is_admin,
-        # pytincture enforces `roles` itself for @bff_policy(roles=...), so
-        # declaring it here is what makes admin-only exports work.
-        "roles": ["admin", "user"] if is_admin else ["user"],
+        "role": role,
+        # Kept for one release, for anything not yet reading `role`.
+        "is_admin": role == ADMIN,
+        # pytincture enforces `roles` itself for @bff_policy(roles=...): every
+        # listed role must be present, so each role carries the ones below it
+        # and roles={"power"} means "Power User or above".
+        "roles": roles_claim(role),
     }
 
 
@@ -79,15 +83,26 @@ def policy_hook(
     Authorise one BFF call.
 
     pytincture has already enforced every claim it recognises — ``roles``
-    included — before this runs. What is left is the app-specific key
-    ``admin_required``, and the baseline check that the caller is someone.
+    included — before this runs. What is left is the baseline check that the
+    caller is someone, and the app's own keys:
+
+    ``min_role``
+        ``"user"``, ``"power"`` or ``"admin"``: the caller's role must be that
+        or higher. An unknown value denies, so a typo fails closed.
+    ``admin_required``
+        The older spelling of ``min_role="admin"``, kept until every service
+        has moved over.
 
     Contract: ``True``/``None`` allow, ``False`` denies, anything else fails
     closed with a RuntimeError.
     """
     if not user or not user.get("user_id"):
         return False
-    if policy.get("admin_required") and not user.get("is_admin"):
+    role = role_of(user)
+    minimum = policy.get("min_role")
+    if minimum is not None and not (is_role(minimum) and at_least(role, minimum)):
+        return False
+    if policy.get("admin_required") and role != ADMIN:
         return False
     return True
 

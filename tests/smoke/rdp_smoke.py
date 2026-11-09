@@ -1,0 +1,271 @@
+"""
+RDP desktops, end to end (#57-#62).
+
+Needs (see README.md, "RDP smoke"):
+  - the RDP target: podman run -d --name ix-rdptest
+        -p 127.0.0.1:3389:3389 -p 127.0.0.1:2224:22 iguanaxterm-rdptest
+  - guacd bound to loopback on the host network, e.g. on :4823
+  - the app on :8799 with GANXTERM_GUACD pointing at that guacd, and a FRESH
+    data dir (GANXTERM_DATA_DIR, also given to this script as IX_DATA_DIR so
+    it can read the pinned certificate)
+
+What it pins:
+  - an RDP site is saved from the editor, connects, and draws the desktop
+  - the certificate is pinned (rdp-sha256:) on first connect
+  - typing reaches the session; Ctrl+Alt+Del reaches it (the target binds it
+    to a marker file)
+  - the remote desktop follows a resize of the pane
+  - clipboard both ways: the desktop's copy lands here; Paste to desktop and
+    Ctrl+V put this computer's text there
+  - a refused login (NLA against xrdp) is explained
+  - the tunnel: a site reachable only through the SSH target connects
+  - a changed certificate is refused with the host-key message, and
+    Forget host key lets it connect again
+"""
+import os
+import sqlite3
+import subprocess
+import sys as _sys
+import time
+
+from playwright.sync_api import sync_playwright
+
+_sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from harness import dismiss_password_nag, record_toasts, reset_workspace, session_leaf, toast_text  # noqa: E402
+
+BASE = "http://127.0.0.1:8799"
+APP = f"{BASE}/iguanaxterm/"
+ADMIN_PASSWORD = os.environ.get("IX_ADMIN_PASS", "testpass123")
+DATA_DIR = os.environ.get("IX_DATA_DIR", "")
+TARGET = os.environ.get("IX_RDP_CONTAINER", "ix-rdptest")
+# Where the app (guacd, really) reaches the target: 127.0.0.1 with host
+# networking; the target's name on a compose-style network otherwise.
+RDP_HOST = os.environ.get("IX_RDP_HOST", "127.0.0.1")
+RDP_PORT = os.environ.get("IX_RDP_PORT", "3389")
+SSH_HOST = os.environ.get("IX_RDP_SSH_HOST", "127.0.0.1")
+SSH_PORT = os.environ.get("IX_RDP_SSH_PORT", "2224")
+
+results = []
+
+
+def check(ok, label, detail=""):
+    results.append(bool(ok))
+    print(f"{'PASS' if ok else 'FAIL'}: {label}{('  -- ' + str(detail)[:300]) if detail else ''}")
+
+
+def target(*command, user="testuser"):
+    """Run a command in the RDP target, in the RDP session's X display."""
+    shell = " ".join(command)
+    proc = subprocess.run(
+        ["podman", "exec", "-u", user, TARGET, "sh", "-c", f"DISPLAY=:10 {shell}"],
+        capture_output=True, text=True, timeout=20,
+    )
+    return proc.stdout.strip()
+
+
+def pinned(name):
+    if not DATA_DIR:
+        return ""
+    with sqlite3.connect(os.path.join(DATA_DIR, "iguanaxterm.db")) as conn:
+        row = conn.execute("SELECT host_key FROM sessions WHERE name = ?", (name,)).fetchone()
+    return row[0] if row else ""
+
+
+def visible_form(page):
+    return page.locator(".wapyt-modal-body:visible").last
+
+
+def add_site(page, name, host, port, session_type="rdp", security=None, via=None,
+             username="testuser", password="testpass"):
+    page.click('.wapyt-toolbar-btn[data-id="new"]')
+    page.wait_for_selector(".wapyt-modal-body:visible .wapyt-form-body", timeout=30000)
+    form = visible_form(page)
+    form.locator('[name="name"]').fill(name)
+    form.locator('[name="folder"]').fill("Desktops")
+    form.locator('[name="session_type"]').select_option(session_type)
+    page.wait_for_timeout(200)
+    form.locator('[name="host"]').fill(host)
+    form.locator('[name="port"]').fill(str(port))
+    form.locator('[name="username"]').fill(username)
+    form.locator('[name="password"]').fill(password)
+    if security:
+        form.locator('[name="security"]').select_option(security)
+    if via:
+        form.locator('[name="via_session_id"]').select_option(label=f"Through SSH session “{via}”")
+    form.locator(".wapyt-form-button-primary").click()
+    page.wait_for_selector(".wapyt-modal-body:visible .wapyt-form-body", state="hidden", timeout=30000)
+    page.wait_for_timeout(600)
+
+
+def open_desktop(page, name):
+    before = page.eval_on_selector_all(".ix-pane", "els => els.map(e => e.dataset.pane)")
+    session_leaf(page, name).dblclick()
+    page.wait_for_function("n => document.querySelectorAll('.ix-pane').length > n", arg=len(before))
+    after = page.eval_on_selector_all(".ix-pane", "els => els.map(e => e.dataset.pane)")
+    return [x for x in after if x not in before][0]
+
+
+DRAWN = """
+(pane) => {
+  const root = document.querySelector(`#pane-term-${pane} .ix-rdp`);
+  if (!root) return -1;
+  let lit = 0;
+  for (const canvas of root.querySelectorAll('canvas')) {
+    if (!canvas.width || !canvas.height) continue;
+    const ctx = canvas.getContext('2d');
+    const data = ctx.getImageData(0, 0, Math.min(canvas.width, 400), Math.min(canvas.height, 300)).data;
+    for (let i = 0; i < data.length; i += 4 * 97) if (data[i + 3] && (data[i] + data[i + 1] + data[i + 2]) > 30) lit++;
+  }
+  return lit;
+}
+"""
+
+
+def wait_drawn(page, pane, timeout_s=30):
+    end = time.time() + timeout_s
+    lit = 0
+    while time.time() < end:
+        lit = page.evaluate(DRAWN, pane)
+        if lit > 20:
+            return lit
+        page.wait_for_timeout(500)
+    return lit
+
+
+def close_pane(page, pane):
+    """Tabbed mode: the pane's own close button is for tiles; close its tab."""
+    page.locator(f'.wapyt-tab[data-tab-id="{pane}"] .wapyt-tab-close').click()
+    page.wait_for_timeout(800)
+
+
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+    context = browser.new_context(viewport={"width": 1400, "height": 900},
+                                  permissions=["clipboard-read", "clipboard-write"])
+    record_toasts(context)
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+    page.goto(APP, wait_until="domcontentloaded", timeout=30000)
+    page.fill('input[name="email"]', "admin")
+    page.fill('input[name="password"]', ADMIN_PASSWORD)
+    page.click('input[type="submit"]')
+    page.wait_for_selector(".wapyt-toolbar", timeout=180000)
+    reset_workspace(page)
+
+    # ── connect, draw, pin ─────────────────────────────────────────────────
+    add_site(page, "win-box", RDP_HOST, RDP_PORT)
+    target("rm -f /tmp/typed-ok /tmp/cad-pressed")
+    pane = open_desktop(page, "win-box")
+    lit = wait_drawn(page, pane)
+    check(lit > 20, "the RDP desktop draws in the pane", f"{lit} lit samples")
+    check(pinned("win-box").startswith("rdp-sha256:"), "the certificate is pinned on first connect",
+          pinned("win-box"))
+
+    # ── typing and Ctrl+Alt+Del ─────────────────────────────────────────────
+    page.click(f"#pane-term-{pane} .ix-rdp")
+    page.wait_for_timeout(500)
+    # A previous run's Ctrl+V test leaves bash in quoted-insert, which takes
+    # the next key literally: two Enters clear it and any half-typed line.
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(200)
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(300)
+    page.keyboard.type("touch /tmp/typed-ok\n", delay=30)
+    page.wait_for_timeout(1500)
+    check(target("test -f /tmp/typed-ok && echo yes") == "yes", "typed text reaches the session")
+    page.click(f'[data-pane-cad="{pane}"]')
+    page.wait_for_timeout(1500)
+    check(target("test -f /tmp/cad-pressed && echo yes") == "yes", "Ctrl+Alt+Del reaches the session")
+
+    # ── resize follows the pane ──────────────────────────────────────────────
+    size = "p => { const r = document.querySelector(`#pane-term-${p} .ix-rdp`).ixRdp; return [r.display.getWidth(), r.display.getHeight()]; }"
+    before = page.evaluate(size, pane)
+    page.set_viewport_size({"width": 1100, "height": 760})
+    page.wait_for_timeout(3000)
+    after = page.evaluate(size, pane)
+    check(before != after and after[0] < before[0], "the remote screen follows a resize", f"{before} -> {after}")
+    page.set_viewport_size({"width": 1400, "height": 900})
+    page.wait_for_timeout(1500)
+
+    # ── clipboard both ways ──────────────────────────────────────────────────
+    marker = f"from-desktop-{int(time.time())}"
+    # xclip must keep owning the selection until xrdp asks for it: one left
+    # in the background dies with `podman exec`. -quiet keeps it in the
+    # foreground, serving, until we stop it.
+    owner = subprocess.Popen(
+        ["podman", "exec", "-u", "testuser", TARGET, "sh", "-c",
+         f"printf %s {marker} | DISPLAY=:10 xclip -quiet -selection clipboard"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    got = ""
+    for _ in range(20):
+        page.wait_for_timeout(500)
+        got = page.evaluate("() => navigator.clipboard.readText()")
+        if got == marker:
+            break
+    owner.terminate()
+    check(got == marker, "the desktop's copy lands on this computer's clipboard", got)
+
+    here = f"from-here-{int(time.time())}"
+    page.evaluate("t => navigator.clipboard.writeText(t)", here)
+    page.click(f'[data-pane-clip-send="{pane}"]')
+    page.wait_for_timeout(2000)
+    remote = target("xclip -o -selection clipboard")
+    check(remote == here, "Paste to desktop sets the desktop's clipboard", remote)
+
+    again = f"ctrl-v-{int(time.time())}"
+    page.evaluate("t => navigator.clipboard.writeText(t)", again)
+    page.click(f"#pane-term-{pane} .ix-rdp")
+    page.keyboard.press("Control+V")
+    page.wait_for_timeout(2000)
+    remote = target("xclip -o -selection clipboard")
+    check(remote == again, "Ctrl+V sends this computer's clipboard first", remote)
+    close_pane(page, pane)
+
+    # ── a refused login is explained ─────────────────────────────────────────
+    add_site(page, "nla-box", RDP_HOST, RDP_PORT, security="nla")
+    pane = open_desktop(page, "nla-box")
+    page.wait_for_timeout(8000)
+    toasts = toast_text(page)
+    check("login was refused" in toasts, "NLA against xrdp: the refusal is explained", toasts[-200:])
+    close_pane(page, pane)
+
+    # ── through the SSH tunnel ───────────────────────────────────────────────
+    add_site(page, "jump", SSH_HOST, SSH_PORT, session_type="ssh")
+    add_site(page, "hidden-box", "127.0.0.1", "3390", via="jump")
+    pane = open_desktop(page, "hidden-box")
+    lit = wait_drawn(page, pane)
+    check(lit > 20, "a desktop reachable only through SSH connects through the tunnel", f"{lit}")
+    check(pinned("hidden-box").startswith("rdp-sha256:"), "its certificate is pinned through the tunnel")
+    close_pane(page, pane)
+
+    # ── a changed certificate is refused; Forget lets it connect ─────────────
+    first_pin = pinned("win-box")
+    subprocess.run(["podman", "exec", TARGET, "/rotate-cert.sh"], capture_output=True, timeout=30)
+    time.sleep(2)
+    pane = open_desktop(page, "win-box")
+    page.wait_for_timeout(6000)
+    toasts = toast_text(page)
+    check("has changed" in toasts and wait_drawn(page, pane, 1) <= 20,
+          "a changed certificate is refused", toasts[-200:])
+    check(pinned("win-box") == first_pin, "the pin is not replaced")
+    close_pane(page, pane)
+    session_leaf(page, "win-box").click(button="right")
+    page.wait_for_timeout(300)
+    page.locator(".wapyt-tree-menu-item:visible", has_text="Forget host key").click()
+    page.wait_for_timeout(1000)
+    pane = open_desktop(page, "win-box")
+    lit = wait_drawn(page, pane)
+    check(lit > 20 and pinned("win-box") not in ("", first_pin),
+          "after Forget, it connects and pins the new certificate", pinned("win-box"))
+    close_pane(page, pane)
+
+    real = [e for e in errors if "WebSocket" not in e]
+    check(not real, "no console errors", "; ".join(real)[:400])
+    page.screenshot(path=os.environ.get("IX_SHOT", "/tmp/rdp_smoke.png"))
+    browser.close()
+
+print(f"\n{sum(results)}/{len(results)} passed")
+_sys.exit(0 if all(results) else 1)

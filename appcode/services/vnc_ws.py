@@ -125,7 +125,7 @@ async def desktop(websocket: WebSocket, session_id: int) -> None:
         return
     # The one access check (#38): owned, or assigned through a site list.
     resolved = resolve_site(int(session_id), user_id)
-    if resolved is None or not session_caps(resolved[0].get("type")).get("desktop"):
+    if resolved is None or resolved[0].get("type") != "vnc":
         await websocket.close(code=CLOSE_NOT_FOUND)
         return
     profile, access = resolved

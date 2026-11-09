@@ -65,6 +65,9 @@ from services.about_service import AboutService
 from services.downloads import DownloadService
 from services.layout_service import LayoutService
 from services.paths import (
+    RDP_KEYBOARDS,
+    RDP_RESIZE,
+    RDP_SECURITY,
     SESSION_TYPES,
     LocalNames,
     breadcrumbs,
@@ -229,6 +232,8 @@ class IguanaXterm(MainWindow):
         self._grid_proxies: list = []
         self._maximized: str | None = None
         self._me: dict = {}
+        self._features: dict = {}      # SessionService.features(): {"rdp": bool}
+        self._guac_task = None         # guacamole-common-js loader, once started
         self._release: dict = {}       # AboutService.latest(), once per load
 
         self._build_chrome()
@@ -414,6 +419,21 @@ class IguanaXterm(MainWindow):
                     pane["rfb"].focus()
                 return
 
+            win_key = event.target.closest("[data-pane-winkey]")
+            if win_key:
+                pane = self._panes.get(win_key.dataset.paneWinkey)
+                if pane and pane.get("rfb") is not None:
+                    pane["rfb"].sendWindowsKey()
+                    pane["rfb"].focus()
+                return
+            full = event.target.closest("[data-pane-fullscreen]")
+            if full:
+                pane = self._panes.get(full.dataset.paneFullscreen)
+                if pane and pane.get("rfb") is not None:
+                    pane["rfb"].fullscreen()
+                    pane["rfb"].focus()
+                return
+
             maximizer = event.target.closest("[data-pane-max]")
             if maximizer:
                 self._toggle_maximize(maximizer.dataset.paneMax)
@@ -440,7 +460,7 @@ class IguanaXterm(MainWindow):
                 return
             target = event.target
             # The same goes for a remote desktop: Escape is the remote's key.
-            if target and hasattr(target, "closest") and target.closest(".wapyt-terminal, .ix-vnc"):
+            if target and hasattr(target, "closest") and target.closest(".wapyt-terminal, .ix-vnc, .ix-rdp"):
                 return
             self._toggle_maximize(self._maximized)
 
@@ -453,6 +473,10 @@ class IguanaXterm(MainWindow):
 
     async def _load_identity(self) -> None:
         self._me = await UserService().me_async()
+        try:
+            self._features = await SessionService().features_async()
+        except Exception:
+            self._features = {}
         role = self._me.get("role")
         suffix = f" · {_ROLE_LABELS[role]}" if role in ("admin", "power") else ""
         self._toolbar.set_text("user", f"{self._me.get('username', '')}{suffix}")
@@ -519,16 +543,18 @@ class IguanaXterm(MainWindow):
             ("mdi-bug-outline", "Issues", "Report a problem or ask for a feature",
              f"{REPO_URL}/issues"),
         )
-        modal = ModalWindow(ModalConfig(dispose_on_close=True, title="About IguanaXterm", width=520, height=400))
+        modal = ModalWindow(ModalConfig(dispose_on_close=True, title="About IguanaXterm", width=520, height=440))
         modal.body.innerHTML = (
             '<div class="ix-about">'
             '<div class="ix-about-head">'
             '<img class="ix-about-logo" src="/static/el_iguana_avatar.webp" alt="">'
             '<div><div class="ix-about-name">IguanaXterm '
             f'<span class="ix-about-version">{esc(VERSION)}</span></div>'
-            '<div class="ix-about-sub">SSH, Telnet, SFTP, FTP and VNC in the browser · pytincture · wapyt · '
+            '<div class="ix-about-sub">SSH, Telnet, SFTP, FTP, VNC and RDP in the browser · pytincture · wapyt · '
             f'{esc(ABOUT_LICENSE)} license</div></div></div>'
             f'<div class="ix-about-update" id="ix-about-update">{self._release_html()}</div>'
+            '<div class="ix-about-rdp" id="ix-about-rdp">'
+            '<span class="mdi mdi-microsoft-windows"></span> RDP: checking…</div>'
             '<div class="ix-about-links">' + "".join(
                 f'<a class="ix-about-link" href="{esc(url)}" target="_blank" rel="noopener">'
                 f'<span class="mdi {icon}"></span><span><b>{esc(label)}</b>'
@@ -539,6 +565,23 @@ class IguanaXterm(MainWindow):
         modal.show()
         if not self._release:
             _spawn(self._check_release(), "release check")
+        _spawn(self._about_rdp(), "rdp status")
+
+    async def _about_rdp(self) -> None:
+        """About's RDP line (#55): whether guacd answers, is down, or isn't set up."""
+        try:
+            status = (await AboutService().rdp_async()).get("status", "")
+        except Exception:
+            status = ""
+        text = {
+            "ready": "RDP: ready",
+            "unreachable": "RDP: the guacd service isn't answering, so RDP desktops won't connect",
+            "off": "RDP: not set up on this server (container installs only; see the wiki)",
+        }.get(status, "RDP: couldn't check")
+        line = js.document.getElementById("ix-about-rdp")
+        if line:
+            line.innerHTML = f'<span class="mdi mdi-microsoft-windows"></span> {html.escape(text)}'
+            line.dataset.status = status
 
     def _password_nag(self) -> None:
         """
@@ -982,6 +1025,43 @@ class IguanaXterm(MainWindow):
             await asyncio.sleep(0.1)
         return False
 
+    async def _ensure_guacamole(self) -> bool:
+        """
+        Load guacamole-common-js and the RDP pane class, once, on first use.
+
+        Two classic scripts, in order: the library, then static/rdp-pane.js,
+        which defines ``window.IxRDP``. Waited for the same way as noVNC.
+        """
+        if getattr(js.window, "IxRDP", None):
+            return True
+        if self._guac_task is None:
+            self._guac_task = asyncio.ensure_future(self._load_guacamole())
+        loaded = await asyncio.shield(self._guac_task)
+        if not loaded:
+            self._guac_task = None
+            self._toast("Could not load the remote desktop viewer.", kind="error")
+        return loaded
+
+    async def _load_guacamole(self) -> bool:
+        failed = {"yes": False}
+        for src, ready in (("/guacamole/guacamole-common.min.js", "Guacamole"),
+                           ("/static/rdp-pane.js", "IxRDP")):
+            if getattr(js.window, ready, None):
+                continue
+            script = js.document.createElement("script")
+            script.src = src
+            script.addEventListener("error", create_proxy(lambda *_a: failed.update(yes=True)))
+            js.document.head.appendChild(script)
+            for _ in range(int(_NOVNC_LOAD_SECONDS / 0.1)):
+                if getattr(js.window, ready, None):
+                    break
+                if failed["yes"]:
+                    return False
+                await asyncio.sleep(0.1)
+            else:
+                return False
+        return True
+
     async def _mount_desktop(self, pane_id: str) -> None:
         """
         Open a remote desktop in the pane's panel.
@@ -993,20 +1073,35 @@ class IguanaXterm(MainWindow):
         """
         pane = self._panes.get(pane_id)
         host = js.document.getElementById(f"pane-term-{pane_id}")
-        if pane is None or not host or not await self._ensure_novnc():
+        session = self._session(pane["session_id"]) if pane else None
+        is_rdp = bool(session and session.get("type") == "rdp")
+        loader = self._ensure_guacamole if is_rdp else self._ensure_novnc
+        if pane is None or not host or not await loader():
             self._settle(pane_id)
             return
-        host.innerHTML = '<div class="ix-vnc" tabindex="-1"></div>'
-        screen = host.querySelector(".ix-vnc")
         scheme = "wss" if str(js.location.protocol) == "https:" else "ws"
-        url = f"{scheme}://{js.location.host}/ws/vnc/{pane['session_id']}"
-        options = to_js({"wsProtocols": ["binary"]}, dict_converter=js.Object.fromEntries)
-        rfb = js.window.IxRFB.new(screen, url, options)
-        rfb.scaleViewport = True
-        rfb.resizeSession = False
-        rfb.focusOnClick = True
-        rfb.background = "#0b1220"
+        if is_rdp:
+            # RDP (#58): Guacamole over /ws/rdp/<id>, the login done by the
+            # relay. IxRDP answers the same calls and events as noVNC's RFB, so
+            # everything below drives either. Its keyboard listens on the
+            # screen element, so the Ctrl+V trick listens one level up.
+            host.innerHTML = '<div class="ix-rdp" tabindex="0"></div>'
+            screen = host.querySelector(".ix-rdp")
+            rfb = js.window.IxRDP.new(screen, f"{scheme}://{js.location.host}/ws/rdp/{pane['session_id']}")
+            key_target = host
+        else:
+            host.innerHTML = '<div class="ix-vnc" tabindex="-1"></div>'
+            screen = host.querySelector(".ix-vnc")
+            url = f"{scheme}://{js.location.host}/ws/vnc/{pane['session_id']}"
+            options = to_js({"wsProtocols": ["binary"]}, dict_converter=js.Object.fromEntries)
+            rfb = js.window.IxRFB.new(screen, url, options)
+            rfb.scaleViewport = True
+            rfb.resizeSession = False
+            rfb.focusOnClick = True
+            rfb.background = "#0b1220"
+            key_target = screen
         pane["rfb"] = rfb
+        pane["is_rdp"] = is_rdp
 
         def _on_connect(_event) -> None:
             self._settle(pane_id)
@@ -1076,7 +1171,9 @@ class IguanaXterm(MainWindow):
 
         key_proxy = create_proxy(_on_key)
         pane.setdefault("proxies", []).append(key_proxy)
-        screen.addEventListener("keydown", key_proxy, True)
+        key_target.addEventListener("keydown", key_proxy, True)
+        if is_rdp:
+            rfb.focus()
 
     async def _clipboard_to_desktop(self, pane_id: str, then_paste: bool = False) -> None:
         """
@@ -1107,7 +1204,10 @@ class IguanaXterm(MainWindow):
             rfb.clipboardPasteFrom(text)
             pane["clip_sent"] = text
         if then_paste:
-            rfb.sendKey(_XK_V, "KeyV")
+            if pane.get("is_rdp"):
+                rfb.pasteShortcut()
+            else:
+                rfb.sendKey(_XK_V, "KeyV")
         elif text:
             self._toast("Sent to the desktop's clipboard. Paste there as usual.", kind="success")
         rfb.focus()
@@ -1216,6 +1316,16 @@ class IguanaXterm(MainWindow):
             f'      <span class="mdi mdi-keyboard-variant"></span><span>Ctrl+Alt+Del</span></button>'
             if caps["desktop"] else ""
         )
+        if session.get("type") == "rdp":
+            # Keys the browser or this computer keeps for itself (#58).
+            cad += (
+                f'    <button type="button" class="ix-pane-cad" data-pane-winkey="{pane_id}"'
+                f'            title="Send the Windows key (this computer keeps the real one)">'
+                f'      <span class="mdi mdi-microsoft-windows"></span><span>Win</span></button>'
+                f'    <button type="button" class="ix-pane-cad" data-pane-fullscreen="{pane_id}"'
+                f'            title="Fill the screen with this desktop (Esc leaves)">'
+                f'      <span class="mdi mdi-fullscreen"></span><span>Fullscreen</span></button>'
+            )
         return (
             f'<div class="ix-pane" data-pane="{pane_id}">'
             f'  <div class="ix-pane-tabs">'
@@ -2711,6 +2821,8 @@ class IguanaXterm(MainWindow):
             )
         )
 
+        rdp = existing.get("options") if existing.get("type") == "rdp" else {}
+        rdp = rdp if isinstance(rdp, dict) else {}
         has_password = existing.get("has_password")
         has_key = existing.get("has_private_key")
         has_passphrase = existing.get("has_passphrase")
@@ -2733,15 +2845,20 @@ class IguanaXterm(MainWindow):
                                 placeholder="Ungrouped"),
                     FieldConfig(id="session_type", label="Type", type="select",
                                 value=existing.get("type", "ssh"),
+                                # RDP only where the server has guacd (#55).
                                 options=[SelectOption(key, caps["label"])
-                                         for key, caps in SESSION_TYPES.items()]),
+                                         for key, caps in SESSION_TYPES.items()
+                                         if key != "rdp" or self._features.get("rdp")
+                                         or existing.get("type") == "rdp"]),
                     FieldConfig(id="host", label="Host", required=True,
                                 value=existing.get("host", "")),
                     FieldConfig(id="port", label="Port", type="number",
                                 value=existing.get("port", 22), min=1, max=65535),
                     FieldConfig(id="username", label="Username",
                                 value=existing.get("username", ""), span=2,
-                                autocomplete="off"),
+                                autocomplete="off",
+                                help="For RDP: user, DOMAIN\\user or user@domain."
+                                if existing.get("type") == "rdp" else None),
                     FieldConfig(id="password", label="Password", type="password",
                                 span=2, autocomplete="new-password",
                                 help=secret_help,
@@ -2764,9 +2881,9 @@ class IguanaXterm(MainWindow):
                                 placeholder="••••••" if has_passphrase else ""),
                     FieldConfig(id="via_session_id", label="Connect", type="select",
                                 span=2, value=str(existing.get("via_session_id") or 0),
-                                help="For VNC. A tunnel reaches a desktop that only "
-                                     "listens on its own machine; give Host as seen "
-                                     "from there, usually localhost.",
+                                help="For VNC and RDP. A tunnel reaches a desktop that "
+                                     "only listens on its own machine (or network); give "
+                                     "Host as seen from there.",
                                 options=[SelectOption("0", "Directly")] + [
                                     SelectOption(str(s["id"]), f"Through SSH session “{s['name']}”")
                                     for s in self._sessions
@@ -2774,6 +2891,24 @@ class IguanaXterm(MainWindow):
                                     and not s.get("shared")
                                     and s["id"] != session_id
                                 ]),
+                    # RDP settings (#56), stored in the site's options.
+                    FieldConfig(id="domain", label="Domain",
+                                value=rdp.get("domain", ""), placeholder="Optional",
+                                help="Or put it in the username: DOMAIN\\user."),
+                    FieldConfig(id="security", label="Security", type="select",
+                                value=rdp.get("security", "any"),
+                                options=[SelectOption(k, v) for k, v in RDP_SECURITY],
+                                help="Negotiate suits most servers. RDP security is "
+                                     "legacy: weak, and no certificate to pin."),
+                    FieldConfig(id="resize", label="When the pane resizes", type="select",
+                                value=rdp.get("resize", "display-update"),
+                                options=[SelectOption(k, v) for k, v in RDP_RESIZE]),
+                    FieldConfig(id="keyboard", label="Keyboard layout", type="select",
+                                value=rdp.get("keyboard", "en-us-qwerty"),
+                                options=[SelectOption(k, v) for k, v in RDP_KEYBOARDS],
+                                help="The layout the Windows session uses."),
+                    FieldConfig(id="console", label="Admin console session", type="checkbox",
+                                value=bool(rdp.get("console")), span=2),
                     FieldConfig(id="description", label="Description",
                                 value=existing.get("description", ""), span=2),
                 ],
@@ -2795,9 +2930,14 @@ class IguanaXterm(MainWindow):
             for field in ("password",):
                 form.set_field_disabled(field, session_type == "telnet")
             form.set_field_disabled("username", session_type in ("telnet", "vnc"))
-            form.set_field_disabled("private_key", session_type in ("telnet", "ftp", "vnc"))
-            form.set_field_disabled("passphrase", session_type in ("telnet", "ftp", "vnc"))
-            form.set_field_disabled("via_session_id", session_type != "vnc")
+            form.set_field_disabled("private_key", session_type in ("telnet", "ftp", "vnc", "rdp"))
+            form.set_field_disabled("passphrase", session_type in ("telnet", "ftp", "vnc", "rdp"))
+            form.set_field_disabled("via_session_id", not session_caps(session_type)["desktop"])
+            for field in _RDP_FIELDS:
+                if session_type == "rdp":
+                    form.show_field(field)
+                else:
+                    form.hide_field(field)
 
         form.on_change(_on_type_change)
         # An existing profile opens with its own type's fields, not SSH's.
@@ -2821,6 +2961,14 @@ class IguanaXterm(MainWindow):
                     "description": values.get("description") or "",
                     "via_session_id": int(values.get("via_session_id") or 0),
                 }
+                if payload["session_type"] == "rdp":
+                    payload["options"] = {
+                        "domain": values.get("domain") or "",
+                        "security": values.get("security") or "any",
+                        "resize": values.get("resize") or "display-update",
+                        "keyboard": values.get("keyboard") or "en-us-qwerty",
+                        "console": bool(values.get("console")),
+                    }
                 # An empty secret field means "unchanged" when one is stored,
                 # and the service's sentinel default expresses that by omission.
                 if values.get("password"):
@@ -3408,6 +3556,8 @@ _ABOUT_CSS = """
 .ix-about-version{font:600 13px ui-monospace,Menlo,Consolas,monospace;color:#6ee7b7;margin-left:4px;}
 .ix-about-sub{color:#94a3b8;font-size:12px;}
 .ix-about-update{padding:8px 10px;border-radius:6px;background:#111827;border:1px solid #334155;}
+.ix-about-rdp{padding:6px 10px;font-size:13px;color:#cbd5e1;}
+.ix-about-rdp[data-status="unreachable"]{color:#fbbf24;}
 .ix-about-update .mdi-arrow-up-circle{color:#34d399;}
 .ix-about-update a,.ix-about-link{color:#6ee7b7;}
 .ix-about-links{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
@@ -3525,6 +3675,9 @@ _PANE_CSS = """
 .ix-pane-panel[hidden],.ix-pane-tab[hidden]{display:none;}
 /* A remote desktop: noVNC's canvas scales to fill this, letterboxed. */
 .ix-vnc{position:absolute;inset:0;background:#0b1220;overflow:hidden;outline:none;}
+.ix-rdp{position:absolute;inset:0;background:#0b1220;overflow:hidden;outline:none;cursor:default;}
+.ix-rdp .ix-rdp-display{position:absolute;}
+.ix-rdp:focus-visible{box-shadow:inset 0 0 0 2px var(--wapyt-accent,#3b82f6);}
 .ix-pane-cad{display:inline-flex;align-items:center;gap:5px;margin-right:6px;
   padding:3px 9px;color:#94a3b8;background:transparent;border:1px solid #334155;
   border-radius:6px;cursor:pointer;font:11px system-ui,sans-serif;white-space:nowrap;}
@@ -3638,6 +3791,9 @@ _SFTP_CSS = """
   .ix-queue-progress .wapyt-progress-value{min-width:64px;}
 }
 """
+
+# The session editor's RDP-only fields (#56), shown for RDP sites alone.
+_RDP_FIELDS = ("domain", "security", "resize", "keyboard", "console")
 
 # services/live.py REVOKED, which the relay sends when access is taken away.
 _ACCESS_REMOVED = "Access to this site was removed."

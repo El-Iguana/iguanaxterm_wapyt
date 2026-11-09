@@ -81,6 +81,7 @@ from services.terminal_ws import router as terminal_router  # noqa: E402
 from services.transfer import router as transfer_router  # noqa: E402
 from services.downloads import router as downloads_router  # noqa: E402
 from services.vnc_ws import router as vnc_router  # noqa: E402
+from services.rdp_ws import router as rdp_router  # noqa: E402
 
 APPLICATION = "iguanaxterm"
 # IguanaXterm's own cookie names (iguanaxterm-dev-*, __Host-iguanaxterm-*),
@@ -271,6 +272,7 @@ def build_app():
     application.include_router(transfer_router)
     application.include_router(downloads_router)
     application.include_router(vnc_router)
+    application.include_router(rdp_router)
 
     # xterm is served from this origin because pytincture's CSP is
     # `script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:` and
@@ -297,6 +299,11 @@ def build_app():
     # reason as xterm.
     application.mount(
         "/novnc", StaticFiles(directory=str(APPCODE / "vendor" / "novnc")), name="novnc"
+    )
+    # guacamole-common-js 1.6.0, for RDP panes (#58); loaded on first use.
+    application.mount(
+        "/guacamole", StaticFiles(directory=str(APPCODE / "vendor" / "guacamole")),
+        name="guacamole",
     )
 
     # Application artwork. Same-origin for the same CSP reason as xterm:

@@ -3,6 +3,7 @@
 IguanaXterm administration from the command line.
 
     python manage.py health                  # exit 0 when the app answers
+    python manage.py health --rdp            # ... and say whether guacd (RDP) answers
     python manage.py probe host.docker.internal 22       # can the app reach it?
     python manage.py users                   # list accounts
     python manage.py set-role alice power    # admin, power or user
@@ -44,10 +45,14 @@ def _load_dotenv() -> None:
         os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
 
 
-def health() -> int:
+def health(rdp: bool = False) -> int:
     """
     GET /healthz on this machine. The Host header is the canonical origin's,
     because behind a reverse proxy the app answers only to its public name.
+
+    ``--rdp`` also says whether guacd answers. It never changes the exit code
+    (guacd down disables RDP, nothing else), and the container healthcheck
+    leaves it off so a slow guacd can't push it past its 5 s timeout.
     """
     import urllib.request
 
@@ -57,10 +62,21 @@ def health() -> int:
     request = urllib.request.Request(f"http://127.0.0.1:{port}/healthz", headers={"Host": host})
     try:
         with urllib.request.urlopen(request, timeout=4) as response:
-            return 0 if response.status == 200 else 1
+            healthy = response.status == 200
     except Exception as exc:  # noqa: BLE001 - the exit code is the answer
         print(f"unhealthy: {exc}", file=sys.stderr)
         return 1
+    if not rdp:
+        return 0 if healthy else 1
+    try:
+        from services.guacd import status as guacd_status
+
+        print({"ready": "RDP: ready (guacd answers)",
+               "unreachable": "RDP: guacd is not reachable",
+               "off": "RDP: not set up (GANXTERM_GUACD unset)"}[guacd_status()])
+    except Exception:  # noqa: BLE001
+        pass
+    return 0 if healthy else 1
 
 
 def probe(host: str, port: int) -> int:
@@ -159,7 +175,8 @@ def main(argv: list[str] | None = None) -> int:
     _load_dotenv()
     parser = argparse.ArgumentParser(prog="manage.py", description=__doc__.split("\n\n")[0])
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("health", help="exit 0 when the app answers on this machine")
+    health_cmd = commands.add_parser("health", help="exit 0 when the app answers on this machine")
+    health_cmd.add_argument("--rdp", action="store_true", help="also say whether guacd (RDP) answers")
     probe_cmd = commands.add_parser("probe", help="check this container can reach host:port")
     probe_cmd.add_argument("host")
     probe_cmd.add_argument("port", type=int)
@@ -173,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
     reset.add_argument("--password-stdin", action="store_true", help="read the password from stdin")
     args = parser.parse_args(argv)
     if args.command == "health":
-        return health()
+        return health(args.rdp)
     if args.command == "probe":
         return probe(args.host, args.port)
     if args.command == "users":

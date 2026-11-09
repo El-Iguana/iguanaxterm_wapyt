@@ -1,0 +1,10 @@
+guacamole-common-js 1.6.0, unmodified: all.min.js from the official Apache
+release (Maven Central, org.apache.guacamole:guacamole-common-js:1.6.0,
+guacamole-common-js-1.6.0.zip), renamed guacamole-common.min.js.
+Archive SHA-1 matched the published .sha1, and its .asc signature verified
+against https://downloads.apache.org/guacamole/KEYS (Michael Jumper's code
+signing key, F467 E54A CC52 F1D2 7788 2686 5B29 77AE E5E4 518F).
+Archive sha256 718cde229cfa601c52ddc201afe3f3ed951b8b756957387776d0c460786f0448
+File    sha256 cc89f710ecc544477dbe6bfea453fab752dafa1b1ab9770f523676e7b744b44a
+Apache-2.0: LICENSE and NOTICE are from apache/guacamole-client at tag 1.6.0.
+Matches guacd 1.6.0 (compose.yaml); keep the two on the same version.

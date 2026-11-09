@@ -22,6 +22,7 @@ server would refuse.
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Optional
 
 from pytincture.dataclass import backend_for_frontend, bff_policy
@@ -29,17 +30,57 @@ from pytincture.dataclass import backend_for_frontend, bff_policy
 from services.auth import current_user_id
 from services.db import current_role, encrypt, get_db
 from services.roles import ADMIN, POWER, at_least
-from services.paths import SESSION_TYPES, session_caps
+from services import guacd
+from services.paths import RDP_KEYBOARDS, RDP_RESIZE, RDP_SECURITY, SESSION_TYPES, session_caps
 
 # Columns that are safe to hand to the browser.
 _PUBLIC_COLUMNS = (
     "id, user_id, name, folder, type, host, port, username, description, "
-    "via_session_id, created_at"
+    "via_session_id, options, created_at"
 )
 
 _SENTINEL_UNCHANGED = "\x00unchanged\x00"
 
 _READ_ONLY = "Your account can use sites but not change them"
+
+
+def _parse_options(value: Any) -> dict:
+    """A row's options column as a dict ({} for anything unreadable)."""
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(value or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def clean_rdp_options(options: Any) -> tuple[dict, dict]:
+    """
+    Validate an RDP site's settings (#56). Returns (options, errors); unknown
+    keys are dropped, so nothing else (and never a secret) gets stored.
+    """
+    given = options if isinstance(options, dict) else {}
+    errors: dict = {}
+    domain = str(given.get("domain") or "").strip()
+    if len(domain) > 255 or any(c in domain for c in "\\/@ \t"):
+        errors["domain"] = "A domain name, like CORP (no slashes, @ or spaces)"
+    security = given.get("security") or "any"
+    if security not in {key for key, _label in RDP_SECURITY}:
+        errors["security"] = "Unknown security mode"
+    resize = given.get("resize") or "display-update"
+    if resize not in {key for key, _label in RDP_RESIZE}:
+        errors["resize"] = "Unknown resize mode"
+    keyboard = given.get("keyboard") or "en-us-qwerty"
+    if keyboard not in {key for key, _label in RDP_KEYBOARDS}:
+        errors["keyboard"] = "Unknown keyboard layout"
+    return {
+        "domain": domain,
+        "security": security,
+        "resize": resize,
+        "keyboard": keyboard,
+        "console": bool(given.get("console")),
+    }, errors
 
 
 @backend_for_frontend
@@ -52,6 +93,10 @@ class SessionService:
     # ------------------------------------------------------------------
     # Reads
     # ------------------------------------------------------------------
+
+    def features(self) -> dict:
+        """What this server can connect to: RDP only where guacd is set up (#55)."""
+        return {"rdp": guacd.enabled()}
 
     def list(self) -> list:
         """
@@ -83,7 +128,7 @@ class SessionService:
             # A site the caller owns shows once, as their own.
             shared = conn.execute(
                 "SELECT s.id, s.user_id, s.name, s.folder, s.type, s.host, s.port, "
-                "       s.username, s.description, s.created_at, "
+                "       s.username, s.description, s.created_at, s.options, "
                 "       (s.host_key <> '') AS has_host_key, "
                 "       MIN(l.name COLLATE NOCASE) AS list_name, "
                 "       MAX(l.allow_files) AS allow_files, "
@@ -105,6 +150,7 @@ class SessionService:
                 "has_private_key": bool(row["has_private_key"]),
                 "has_passphrase": bool(row["has_passphrase"]),
                 "has_host_key": bool(row["has_host_key"]),
+                "options": _parse_options(row["options"]),
                 "editable": editable,
                 "can_forget": editable,
                 "files": bool(session_caps(row["type"])["files"]),
@@ -125,6 +171,7 @@ class SessionService:
                 "description": row["description"],
                 "created_at": row["created_at"],
                 "via_session_id": 0,
+                "options": _parse_options(row["options"]),
                 "has_host_key": bool(row["has_host_key"]),
                 "editable": False,
                 # Only the owner or an Admin clears a shared site's pin.
@@ -155,6 +202,7 @@ class SessionService:
             return {}
         return {
             **dict(row),
+            "options": _parse_options(row["options"]),
             "has_password": bool(row["has_password"]),
             "has_private_key": bool(row["has_private_key"]),
             "has_passphrase": bool(row["has_passphrase"]),
@@ -196,6 +244,7 @@ class SessionService:
         private_key: str = _SENTINEL_UNCHANGED,
         via_session_id: Optional[int] = 0,
         passphrase: str = _SENTINEL_UNCHANGED,
+        options: Any = None,
     ) -> dict:
         """
         Create or update a profile.
@@ -212,6 +261,13 @@ class SessionService:
                 return {"ok": False, "error": _READ_ONLY}
 
         errors = self._validate(name, host, port, session_type)
+        stored_options: dict = {}
+        if session_type == "rdp":
+            if not guacd.enabled():
+                return {"ok": False, "errors": {
+                    "session_type": "RDP isn't set up on this server (no guacd)"}}
+            stored_options, option_errors = clean_rdp_options(options)
+            errors.update(option_errors)
         if errors:
             return {"ok": False, "errors": errors}
 
@@ -222,8 +278,8 @@ class SessionService:
         host = host.strip()
         folder = folder.strip()
         port = int(port)
-        # Only a desktop rides a tunnel; any other type drops the setting.
-        via = int(via_session_id or 0) if session_type == "vnc" else 0
+        # Only a desktop (VNC, RDP) rides a tunnel; any other type drops it.
+        via = int(via_session_id or 0) if session_caps(session_type)["desktop"] else 0
 
         with get_db() as conn:
             if via:
@@ -249,9 +305,11 @@ class SessionService:
                 assignments = [
                     "name = ?", "host = ?", "port = ?", "username = ?",
                     "type = ?", "folder = ?", "description = ?", "via_session_id = ?",
+                    "options = ?",
                 ]
                 values: list[Any] = [
                     name, host, port, username, session_type, folder, description, via,
+                    json.dumps(stored_options),
                 ]
                 if password != _SENTINEL_UNCHANGED:
                     assignments.append("password = ?")
@@ -262,12 +320,14 @@ class SessionService:
                 if passphrase != _SENTINEL_UNCHANGED:
                     assignments.append("passphrase = ?")
                     values.append(encrypt(passphrase))
-                # Host or port changed means the pinned key belongs to a
-                # different endpoint; drop it so the next connect re-pins.
+                # Host, port or type changed means the pin belongs to a different
+                # endpoint (or protocol: an SSH key is no RDP certificate); drop
+                # it so the next connect re-pins.
                 assignments.append(
-                    "host_key = CASE WHEN host = ? AND port = ? THEN host_key ELSE '' END"
+                    "host_key = CASE WHEN host = ? AND port = ? AND type = ? "
+                    "THEN host_key ELSE '' END"
                 )
-                values.extend([host, port])
+                values.extend([host, port, session_type])
 
                 values.extend([int(session_id), self._user_id])
                 conn.execute(
@@ -287,11 +347,11 @@ class SessionService:
                 cursor = conn.execute(
                     "INSERT INTO sessions "
                     "(user_id, name, host, port, username, type, folder, description, "
-                    " via_session_id, password, private_key, passphrase) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " via_session_id, options, password, private_key, passphrase) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         self._user_id, name, host, port, username, session_type,
-                        folder, description, via,
+                        folder, description, via, json.dumps(stored_options),
                         encrypt("" if password == _SENTINEL_UNCHANGED else password),
                         encrypt("" if private_key == _SENTINEL_UNCHANGED else private_key),
                         encrypt("" if passphrase == _SENTINEL_UNCHANGED else passphrase),

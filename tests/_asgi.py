@@ -112,12 +112,13 @@ class WebSocket:
             raise Closed(1006, "the route returned without closing")
         raise TimeoutError("nothing from the route")
 
-    async def receive(self, timeout: float = 10) -> Any:
+    async def receive(self, timeout: float = 10, raw: bool = False) -> Any:
+        """The next frame: JSON-decoded text, raw text with ``raw``, or bytes."""
         message = await self._next(timeout)
         if message["type"] == "websocket.close":
             raise Closed(message.get("code", 1000), message.get("reason") or "")
         if message.get("text") is not None:
-            return json.loads(message["text"])
+            return message["text"] if raw else json.loads(message["text"])
         return message.get("bytes")
 
     async def send_bytes(self, data: bytes) -> None:

@@ -598,8 +598,9 @@ constraint in the table). `users.created_by` records who made an account
 - **Upgrading:** `init_db` adds both columns; `is_admin = 1` becomes `admin`
   and **every other account becomes `power`**, so nobody loses their sites.
 - **`is_admin` is kept in step for one release** (`db.set_role` writes both;
-  so do the seed and `manage.py`). The Users screen still reads it until
-  #35. Drop the column, the claim and `UserService.set_admin` after that.
+  so do the seed and `manage.py`). Nothing reads it since #35 except
+  `roles.role_of`, for sessions signed in before 2.3.0. Drop the column and
+  the claim in the release after.
 - **Claims:** `role`, `is_admin`, and `roles` = the role plus everything below
   it (`["admin","power","user"]`, `["power","user"]`, `["user"]`).
   pytincture's `@bff_policy(roles=...)` needs *every* listed role present
@@ -611,7 +612,25 @@ constraint in the table). `users.created_by` records who made an account
   gives it `admin` from `is_admin`, otherwise `user`, until it signs in again,
   so a migrated Power User may be refused Power User calls until they sign in
   again. Nothing gains rights.
-- Last-admin guards count `role = 'admin'` (`db.admin_count`).
+- Last-admin guards count `role = 'admin'` (`db.admin_count`). From the UI
+  they are behind "you can't demote/delete yourself"; `manage.py set-role`
+  is where they still bite.
+
+**Who manages whom (#35)**, all in `UserService`:
+
+- Admins manage every account and are the only ones who change roles
+  (`set_role`). Power Users see and manage only accounts with `role = 'user'`
+  and `created_by = them`, and create Users only. `_managed()` answers
+  "User not found" for anything else, so ids can't be probed.
+- **The caller's role is read from the database on every call**
+  (`_caller_role`), not from the session. A demoted Power User loses control
+  of their Users on the next call, not at the next sign-in.
+- Deleting an account moves the accounts it created to whoever deletes it
+  (`created_by` rewritten); its own sites are deleted, as before.
+  `delete_preview` gives the confirm dialog the counts. Site lists join this
+  in #37.
+- The Users button is hidden for Users; a Power User's dialog is "My Users",
+  with no role picker and no "Created by" column.
 - `@backend_for_frontend` replaces the class: read method policies in tests
   from `UserService._pytincture_bff_original`. `tests/test_roles.py`.
 

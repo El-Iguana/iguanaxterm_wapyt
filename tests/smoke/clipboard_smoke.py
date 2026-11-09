@@ -12,6 +12,10 @@ What it pins:
   - Ctrl+Shift+C copies
   - the right-click menu: Copy is disabled with nothing selected, Copy and
     Paste both work, and a browser that refuses clipboard access is explained
+  - OSC 52: a remote program that copies (Claude Code's full-screen mode,
+    tmux, vim with mouse=a) lands on this computer's clipboard, and an OSC 52
+    read request ("?") is ignored
+  - with mouse tracking on, Shift+drag still makes a terminal selection
 """
 import re
 
@@ -112,7 +116,7 @@ with sync_playwright() as p:
     page.click(screen, button="right")
     page.wait_for_selector(".wapyt-terminal-menu", timeout=5000)
     labels = page.eval_on_selector_all(".wapyt-terminal-menu-item",
-                                       "els => els.map(e => [e.innerText.split('\\n')[0], e.disabled])")
+                                       "els => els.map(e => [e.innerText.split('\\n')[0], e.getAttribute('aria-disabled') === 'true'])")
     check(labels == [["Copy", True], ["Paste", False], ["Select all", False]],
           "menu: Copy is disabled with nothing selected", str(labels))
     page.keyboard.press("Escape")
@@ -125,17 +129,50 @@ with sync_playwright() as p:
     select_line(page, pane, "MENU_COPY_GHI")
     row = page.locator(f"#pane-term-{pane} .xterm-rows > div:has-text('MENU_COPY_GHI')").last
     row.click(button="right")
-    page.locator(".wapyt-terminal-menu-item[data-action='copy']").dispatch_event("mousedown")
+    page.locator(".wapyt-terminal-menu-item[data-action='copy']").click()
     page.wait_for_timeout(400)
     check("MENU_COPY_GHI" in clipboard(page), "menu Copy copies the selection")
 
     seed(page, "echo MENU_PASTE_JKL")
     page.click(screen, button="right")
-    page.locator(".wapyt-terminal-menu-item[data-action='paste']").dispatch_event("mousedown")
+    page.locator(".wapyt-terminal-menu-item[data-action='paste']").click()
     page.wait_for_timeout(400)
     page.keyboard.press("Enter")
     page.wait_for_timeout(900)
     check(rows(page, pane).count("MENU_PASTE_JKL") >= 2, "menu Paste pastes")
+
+    # ── OSC 52: the remote program copies ───────────────────────────────────
+    seed(page, "nothing yet")
+    page.click(screen)
+    page.keyboard.type("printf '\\033]52;c;T1NDNTIgaMOpbGxvIOKckw==\\007'\n")
+    page.wait_for_timeout(900)
+    copied = clipboard(page)
+    check(copied == "OSC52 héllo ✓", "OSC 52 from the remote copies (UTF-8 intact)", repr(copied))
+    check(re.search(r"Copied \d+ characters", toast_text(page) or ""), "and says so", repr(toast_text(page)))
+    seed(page, "KEEP_ME")
+    page.keyboard.type("printf '\\033]52;c;?\\007'\n")
+    page.wait_for_timeout(900)
+    check(clipboard(page) == "KEEP_ME", "an OSC 52 read request is ignored")
+
+    # ── mouse tracking on: Shift+drag still selects ─────────────────────────
+    page.keyboard.type("echo SHIFT_DRAG_MNO; printf '\\033[?1002h\\033[?1006h'\n")
+    page.wait_for_timeout(900)
+    row = page.locator(f"#pane-term-{pane} .xterm-rows > div:has-text('SHIFT_DRAG_MNO')").last
+    box = row.bounding_box()
+    y = box["y"] + box["height"] / 2
+    page.mouse.move(box["x"] + 2, y); page.mouse.down()
+    page.mouse.move(box["x"] + 300, y, steps=8); page.mouse.up()
+    plain = page.evaluate("(p) => !!document.querySelector(`#pane-term-${p} .xterm-selection div`)", pane)
+    check(not plain, "with mouse tracking on, a plain drag goes to the remote")
+    page.keyboard.down("Shift")
+    page.mouse.move(box["x"] + 2, y); page.mouse.down()
+    page.mouse.move(box["x"] + 300, y, steps=8); page.mouse.up()
+    page.keyboard.up("Shift")
+    page.keyboard.press("Control+c")
+    page.wait_for_timeout(400)
+    check("SHIFT_DRAG" in clipboard(page), "Shift+drag selects anyway, and Ctrl+C copies it", repr(clipboard(page)[:40]))
+    page.keyboard.type("printf '\\033[?1002l\\033[?1006l'\n")
+    page.wait_for_timeout(500)
     check(not errors, "no console errors", "; ".join(errors[:3]))
     reset_workspace(page)
 
@@ -147,7 +184,7 @@ with sync_playwright() as p:
     pane = new_pane(page, session_leaf(page))
     page.wait_for_timeout(2000)
     page.click(f"#pane-term-{pane} .xterm-screen", button="right")
-    page.locator(".wapyt-terminal-menu-item[data-action='paste']").dispatch_event("mousedown")
+    page.locator(".wapyt-terminal-menu-item[data-action='paste']").click()
     page.wait_for_timeout(800)
     toast = toast_text(page)
     check("Use Ctrl+V instead" in toast, "a refused clipboard read is explained", repr(toast))

@@ -41,8 +41,12 @@ appcode/                # pytincture modules_path
     ftp.py              #   FTP/FTPS as a paramiko-shaped client (see below)
     telnet.py           #   IAC parser (pure, unit-tested)
     paths.py            #   path/format helpers + SESSION_TYPES — BOTH sides
-    session_service.py  #   BFF: connection profiles
+    session_service.py  #   BFF: connection profiles (own + shared, #39)
     user_service.py     #   BFF: accounts
+    site_list_service.py #  BFF: site lists (#37)
+    access.py           #   resolve_site: the ONLY way to open a site (#38)
+    live.py             #   live connections; recheck() revokes (#41)
+    roles.py            #   admin / power / user
     about.py            #   version + project links — BOTH sides
     release_check.py    #   GitHub latest-release check, cached — plain module
     about_service.py    #   BFF: AboutService.latest() for About + the badge
@@ -646,6 +650,80 @@ how the refusal was checked from a User's browser session.
 - `@backend_for_frontend` replaces the class: read method policies in tests
   from `UserService._pytincture_bff_original`. `tests/test_roles.py`.
 
+### Site lists and the one access check (2.3.0, #37-#41)
+
+A **site list** (`site_lists`, `site_list_items`, `site_list_members`)
+shares saved sites with people. Items reference sites, so a changed password
+applies to everyone. `SiteListService` decides who may *edit* lists (Power
+Users: own lists, own sites, own Users; Admins: everything), by the role in
+the database, answering "List not found" for anything else.
+
+**`access.resolve_site(session_id, user_id)` is the only way to open a site.**
+Owner → full access; otherwise a list containing the site with this person
+as a member → access, with files if any such list allows them; otherwise
+None. Admins get no implicit access. `db.fetch_session` is gone, and
+`tests/test_access.py` fails if any module but `access.py` (and `db.py`)
+calls `decrypt(`. Every path uses it: `terminal_ws`, `vnc_ws` (the desktop
+*and* its tunnel), `sftp_service`, `transfer`, `download_jobs`; the file
+paths go through `resolve_files`, which refuses when files are off ("Session
+not found" for no access at all, so ids can't be probed). `layout_service`
+restores panes for `reachable_site_ids`. **Any new connection path must call
+it** (RDP, #57/#60, is the next one).
+
+- **A desktop's SSH tunnel is resolved as the desktop's owner**, not the
+  person connecting: they needn't (and don't) get the tunnel site.
+- **Host keys pin on the site row whoever connects first**
+  (`access.pin_host_key`, `WHERE id = ? AND host_key = ''`, no `user_id`),
+  replacing the two per-user copies in `terminal_ws` and `pool`. A changed
+  key on a shared site tells the user "Ask the site's owner"
+  (`host_key_message`); the owner gets the full text. Owner or Admin clear it.
+- **Pools stay keyed `(user_id, session_id)`**, but `close(session_id)` used to
+  keep one key per session (`_keys`), so with sharing it closed only one
+  person's channel. It now closes every key for the site; `close_for(user,
+  site)` closes one person's.
+- **`SessionService.list`** returns own sites, then shared ones (one row per
+  site, under the alphabetically first list, files if any list allows them,
+  `via_session_id` zeroed so the owner's tunnel id doesn't leak). Rows carry
+  `editable`, `can_forget`, `files`; the tree turns them into node flags that
+  `TreeAction(requires=[...])` checks. Shared sites group under
+  "Shared · <list>" (`shared_<list>` node ids). `_caps(session)` drops Files
+  from a pane when the list withholds it.
+
+**Revocation (#41)** is `services/live.py`: terminals and desktops register
+`(user_id, session_id, kind, closer)` while open, server-saved folder jobs
+while running. After anything that can take access away (list items,
+members, delete, files switched off; site delete; user delete; role change)
+the service calls `live.recheck()`, which re-asks `site_access` for every live
+entry *and every pooled file/transfer channel* (`pool.keys()`), and closes
+what fails. Rechecking everything rather than computing affected pairs is
+deliberate: a handful of entries, one indexed query each. Closers run on a
+BFF worker thread, so they hop to the event loop with
+`run_coroutine_threadsafe`. A terminal gets an `error` frame "Access to this
+site was removed." then close 4403; the page reloads the tree on that text.
+**VNC (RFB) can't carry a message after the handshake**, so a desktop closes with
+the reason in the close frame and the page, on an unclean drop, reloads the
+site list and says "Access … removed" if the site is gone.
+
+Traps found building it:
+
+- **`DELETE … WHERE x NOT IN (NULL)` deletes nothing.** Emptying a list's
+  members built exactly that (`','.join(...) or 'NULL'`), so "remove
+  everyone" removed no one. Delete the difference row by row instead.
+- **Hidden wapyt modals stay in the DOM.** The second time a dialog opened,
+  `js.document.getElementById("ix-admin-table")` found the *first, hidden*
+  dialog's element and built into that, so the new one was empty. This was
+  already true of the Users screen on a second open. Build into
+  `modal.body.querySelector("#…")`; smoke selectors need `:visible`.
+- **Starlette's TestClient needs `httpx2`**, which the app doesn't use.
+  `tests/_asgi.py` drives HTTP and WebSocket routes over raw ASGI instead,
+  with a stand-in for pytincture's session middleware.
+- **A browser can't see the close code of a WebSocket refused before
+  accept**: it reports 1006, never 4404. The unit tests pin 4404; the smoke
+  test checks "closed, nothing received".
+- `tests/smoke/site_lists_smoke.py` (22 checks) needs a **fresh** data dir.
+  `layout_smoke.py` already failed on `main` (a restored tile's Reconnect
+  button never becomes clickable); not caused by this work.
+
 ### Default password and the reminder (2026-09-29)
 
 As in Monguana: the first admin's password is `GANXTERM_ADMIN_PASS`, or
@@ -983,5 +1061,6 @@ Worth knowing, because most of these are framework-shaped rather than typos:
   and the rebuilt dev wheel. This file is tracked, unlike in the v1 repo —
   the framework pitfalls below are the expensive part of the project.
 - **MIT**, unlike the AGPL-3.0 v1 app at `El-Iguana/iguanaxterm`.
-- Session profiles belong to one user; there is **no unscoped read** of the
-  `sessions` table anywhere.
+- Session profiles belong to one user and reach anyone else only through a
+  site list. Every read of a site's credentials goes through
+  `access.resolve_site`; nothing else decrypts them.

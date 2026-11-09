@@ -183,6 +183,33 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 
+-- Site lists (#37): a named set of saved sites that its owner assigns to
+-- people. Items reference sites rather than copying them, so changing a
+-- site's password changes it for everyone at once. Who may reach a site
+-- through a list is decided in services/access.py, nowhere else.
+CREATE TABLE IF NOT EXISTS site_lists (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name        TEXT    NOT NULL,
+    description TEXT    NOT NULL DEFAULT '',
+    allow_files INTEGER NOT NULL DEFAULT 0,  -- members also get the file browser
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS site_list_items (
+    list_id    INTEGER NOT NULL REFERENCES site_lists(id) ON DELETE CASCADE,
+    session_id INTEGER NOT NULL REFERENCES sessions(id)   ON DELETE CASCADE,
+    PRIMARY KEY (list_id, session_id)
+);
+CREATE INDEX IF NOT EXISTS idx_site_list_items_session ON site_list_items(session_id);
+
+CREATE TABLE IF NOT EXISTS site_list_members (
+    list_id INTEGER NOT NULL REFERENCES site_lists(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id)      ON DELETE CASCADE,
+    PRIMARY KEY (list_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_site_list_members_user ON site_list_members(user_id);
+
 -- One workspace layout per user: which connections were open, where they sat
 -- in the grid, and which mode was in use. Opaque JSON rather than columns,
 -- because the shape belongs to the UI and will change with it.
@@ -333,25 +360,3 @@ def admin_count(conn: sqlite3.Connection, excluding: int = 0) -> int:
     return conn.execute(
         "SELECT COUNT(*) FROM users WHERE role = 'admin' AND id <> ?", (int(excluding),)
     ).fetchone()[0]
-
-
-def fetch_session(session_id: int, user_id: int) -> Optional[dict]:
-    """
-    One profile with its credentials decrypted, or ``None``.
-
-    Every caller scopes by ``user_id``; there is no unscoped read of this table
-    anywhere in the app, which is what keeps one user's saved hosts out of
-    another's reach.
-    """
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT * FROM sessions WHERE id = ? AND user_id = ?",
-            (session_id, user_id),
-        ).fetchone()
-    if not row:
-        return None
-    session = dict(row)
-    session["password"] = decrypt(session.get("password") or "")
-    session["private_key"] = decrypt(session.get("private_key") or "")
-    session["passphrase"] = decrypt(session.get("passphrase") or "")
-    return session

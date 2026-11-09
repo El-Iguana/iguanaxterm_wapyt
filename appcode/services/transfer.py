@@ -30,7 +30,7 @@ from python_multipart.multipart import MultipartParser, parse_options_header
 from starlette.requests import ClientDisconnect
 
 from services.auth import current_user_id
-from services.db import fetch_session
+from services.access import resolve_files
 from services.paths import is_safe_name
 from services import ftp as ftp_helpers
 from services import http_ranges
@@ -75,9 +75,11 @@ def _require_csrf(request: Request) -> None:
 
 def _require_profile(request: Request, session_id: int) -> tuple[int, dict]:
     user_id = _require_user(request)
-    profile = fetch_session(int(session_id), user_id)
+    # The one access check (#38), with the list's file permission.
+    profile, reason = resolve_files(int(session_id), user_id)
     if profile is None:
-        raise HTTPException(status_code=404, detail="Session not found")
+        status = 404 if reason == "Session not found" else 403
+        raise HTTPException(status_code=status, detail=reason)
     return user_id, profile
 
 

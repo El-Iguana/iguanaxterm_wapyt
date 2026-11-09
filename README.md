@@ -148,6 +148,11 @@ from `x11vnc -storepasswd`, and **Connect** set to that machine's SSH session.
 ### Accounts
 
 - **Multi-user** — private session libraries, plus an admin panel
+- **Three roles** — Admin, Power User (saves their own sites, sets up Users)
+  and User (connects to the sites shared with them, can't change any)
+- **Site lists** — share saved sites with people: they connect with the
+  stored login without ever seeing it. The file browser is per list, off by
+  default, and taking access away closes whatever they have open at once
 - **Encrypted at rest** — SSH passwords and private keys under Fernet (AES-128)
 
 ## Stack
@@ -234,9 +239,13 @@ Backups: INSTALL.md §7.
 - Change the default admin password on first login.
 - Saved credentials are encrypted at rest and are **never sent to the browser** —
   the session editor shows whether a secret is stored, not the secret.
-- Host keys are pinned per saved session on first connect. If a host key
-  changes, the connection is refused; clear the pin from the session's
-  right-click menu once you know why it changed.
+- Host keys are pinned per saved session on first connect, whoever connects
+  first, so shared sites are protected too. If a host key changes, the
+  connection is refused; the owner (or an Admin) clears the pin from the
+  session's right-click menu once they know why it changed.
+- Sharing a site gives a shell on that host as its stored login. Share sites
+  with logins made for the purpose. One server-side check decides every way
+  in to a site (terminal, desktop, tunnel, file browser, transfers).
 - Login is rate-limited by pytincture (20 attempts per 60s, per IP and per
   account).
 

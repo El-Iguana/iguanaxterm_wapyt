@@ -208,7 +208,7 @@ def connect(
     where trying again works, so it is not worth surfacing to the user.
 
     Args:
-        session: A decrypted profile from ``db.fetch_session``.
+        session: A decrypted profile from ``access.resolve_site``.
         timeout: Connect, banner and auth timeout in seconds.
         on_learn_host_key: Called with the serialized key the first time a host
             is seen, so the caller can persist the pin.

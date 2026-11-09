@@ -77,6 +77,7 @@ from services.paths import (
 )
 from services.session_service import SessionService
 from services.sftp_service import SFTPService
+from services.site_list_service import SiteListService
 from services.user_service import UserService
 
 # pytincture resolves the browser entrypoint by AST, and its MainWindow
@@ -122,6 +123,7 @@ _TOOLBAR_BUTTONS = (
     ("saved", "Saved files", "mdi-tray-arrow-down"),
     ("|", "", ""),
     ("users", "Users", "mdi-account-group"),
+    ("lists", "Site lists", "mdi-format-list-checks"),
     ("password", "Password", "mdi-key"),
     ("about", "About", "mdi-information-outline"),
 )
@@ -292,14 +294,15 @@ class IguanaXterm(MainWindow):
                 empty_text="No saved sessions yet.\nUse New to add one.",
                 context_actions=[
                     TreeAction("connect", "Connect", "mdi-connection", scope="leaf"),
-                    TreeAction("sftp", "Browse files", "mdi-folder-network", scope="leaf"),
+                    TreeAction("sftp", "Browse files", "mdi-folder-network", scope="leaf",
+                               requires=["files"]),
                     TreeAction(separator=True),
                     # Only on sites this account may change (#36): the server
                     # marks them, and refuses the rest anyway.
                     TreeAction("edit", "Edit", "mdi-pencil", scope="leaf",
                                requires=["editable"]),
                     TreeAction("forget_key", "Forget host key", "mdi-key-remove", scope="leaf",
-                               requires=["editable"]),
+                               requires=["forget"]),
                     TreeAction("delete", "Delete", "mdi-delete", scope="leaf", danger=True,
                                requires=["editable"]),
                 ],
@@ -455,7 +458,7 @@ class IguanaXterm(MainWindow):
         self._toolbar.set_text("user", f"{self._me.get('username', '')}{suffix}")
         # Users can't set anyone up (#35) or change sites (#36).
         can_manage = role in ("admin", "power")
-        for button in ("users", "new", "edit", "delete"):
+        for button in ("users", "lists", "new", "edit", "delete"):
             self._toolbar.set_hidden(button, not can_manage)
         if not can_manage:
             self.tree.set_empty_text(
@@ -573,6 +576,25 @@ class IguanaXterm(MainWindow):
         if focus:
             focus.focus()
 
+    def _on_terminal_error(self, payload: dict) -> None:
+        message = payload.get("message", "Error")
+        self._toast(message, kind="error")
+        if message == _ACCESS_REMOVED:
+            # The site was taken away (#41): drop it from the tree too.
+            _spawn(self._reload_sessions(), "session reload")
+
+    async def _desktop_dropped(self, name: str, session_id: int) -> None:
+        """
+        A desktop closed without warning. After the handshake RFB can't carry a
+        reason, so look: if the site is gone from this person's list, access
+        was taken away (#41); otherwise it is an ordinary drop.
+        """
+        await self._reload_sessions()
+        if self._session(session_id) is None:
+            self._toast(f"{name}: {_ACCESS_REMOVED}", kind="error")
+        else:
+            self._toast(f"{name}: the remote desktop disconnected.", kind="warning")
+
     async def _reload_sessions(self) -> None:
         self._sessions = await SessionService().list_async()
         self._rebuild_tree()
@@ -585,25 +607,49 @@ class IguanaXterm(MainWindow):
         reloading after a save does not collapse what the user had open.
         """
         folders: dict[str, list[dict]] = {}
+        shared: dict[str, list[dict]] = {}
         for session in self._sessions:
-            folders.setdefault(session.get("folder") or UNSORTED, []).append(session)
+            if session.get("shared"):
+                shared.setdefault(session.get("list_name") or "Shared", []).append(session)
+            else:
+                folders.setdefault(session.get("folder") or UNSORTED, []).append(session)
+
+        def _leaf(session: dict) -> TreeItem:
+            # What the server says this person may do with the site (#36, #39):
+            # the right-click entries require these flags.
+            flags = [
+                flag for flag, key in (
+                    ("editable", "editable"), ("forget", "can_forget"), ("files", "files"),
+                ) if session.get(key)
+            ]
+            return TreeItem(
+                id=f"sess_{session['id']}",
+                label=session["name"],
+                icon=session_icon(session.get("type", "ssh")),
+                tooltip=self._session_tooltip(session),
+                data={"flags": flags},
+            )
 
         items = []
         for folder in sorted(folders, key=str.lower):
-            children = [
-                TreeItem(
-                    id=f"sess_{session['id']}",
-                    label=session["name"],
-                    icon=session_icon(session.get("type", "ssh")),
-                    tooltip=self._session_tooltip(session),
-                    data={"flags": ["editable"] if session.get("editable") else []},
-                )
-                for session in folders[folder]
-            ]
+            children = [_leaf(session) for session in folders[folder]]
             items.append(
                 TreeItem(
                     id=f"folder_{folder}",
                     label=folder,
+                    badge=len(children),
+                    items=children,
+                )
+            )
+        # Sites shared through site lists sit below the person's own folders,
+        # one group per list (#39).
+        for list_name in sorted(shared, key=str.lower):
+            children = [_leaf(session) for session in shared[list_name]]
+            items.append(
+                TreeItem(
+                    id=f"shared_{list_name}",
+                    label=f"Shared · {list_name}",
+                    icon="mdi-folder-account",
                     badge=len(children),
                     items=children,
                 )
@@ -616,10 +662,29 @@ class IguanaXterm(MainWindow):
         prefix = f"{user}@" if user else ""
         detail = f"{prefix}{session['host']}:{session['port']}"
         description = session.get("description") or ""
+        if session.get("shared"):
+            owner = session.get("owner") or "someone"
+            description = f"Shared by {owner} in {session.get('list_name', '')}\n{description}"
         return f"{detail}\n{description}".strip()
 
     def _session(self, session_id: int | None) -> dict | None:
         return next((s for s in self._sessions if s["id"] == session_id), None)
+
+    @staticmethod
+    def _caps(session: dict) -> dict:
+        """
+        What a pane for this site offers: its type's capabilities, less the
+        file browser when a site list withholds it (#39).
+        """
+        caps = dict(session_caps(session.get("type")))
+        caps["files"] = bool(caps["files"] and session.get("files", True))
+        return caps
+
+    @staticmethod
+    def _no_files_reason(session: dict) -> str:
+        if session_caps(session.get("type"))["files"]:
+            return "The file browser isn't available on this shared site."
+        return "This connection has no file browser."
 
     # ------------------------------------------------------------------
     # Tree and toolbar events
@@ -657,6 +722,8 @@ class IguanaXterm(MainWindow):
             _spawn(self._session_editor(None), "session editor")
         elif action == "users":
             _spawn(self._admin_panel(), "admin panel")
+        elif action == "lists":
+            _spawn(self._lists_panel(), "site lists")
         elif action == "password":
             self._password_dialog()
         elif action == "about":
@@ -667,6 +734,8 @@ class IguanaXterm(MainWindow):
             _spawn(self._reconnect_all(), "reconnect all")
         elif self._selected_id is None:
             self._toast("Select a session first.", kind="warning")
+        elif action in ("edit", "delete") and not (self._session(self._selected_id) or {}).get("editable"):
+            self._toast("This site is shared with you; only its owner can change it.", kind="warning")
         elif action == "edit":
             _spawn(self._session_editor(self._selected_id), "session editor")
         elif action == "delete":
@@ -739,9 +808,9 @@ class IguanaXterm(MainWindow):
         if session is None:
             return None
 
-        caps = session_caps(session.get("type"))
+        caps = self._caps(session)
         if focus == "files" and not caps["files"]:
-            self._toast("This connection has no file browser.", kind="warning")
+            self._toast(self._no_files_reason(session), kind="warning")
             focus = "terminal"
         if focus == "terminal" and not caps["terminal"] and not caps["desktop"]:
             focus = "files"  # SFTP and FTP profiles are files only
@@ -851,7 +920,7 @@ class IguanaXterm(MainWindow):
             ),
             container=host,
         )
-        terminal.on_error(lambda payload: self._toast(payload.get("message", "Error"), kind="error"))
+        terminal.on_error(self._on_terminal_error)
         # Ctrl+C copies a selection now, so say so: otherwise a copy and an
         # interrupt look the same until you paste.
         terminal.on_copy(lambda payload: self._toast(f"Copied {payload.get('chars', 0)} characters.", kind="success"))
@@ -962,7 +1031,10 @@ class IguanaXterm(MainWindow):
             if refused:
                 self._toast(f"{current['name']}: {refused}", kind="error")
             elif not clean:
-                self._toast(f"{current['name']}: the remote desktop disconnected.", kind="warning")
+                _spawn(
+                    self._desktop_dropped(current["name"], current["session_id"]),
+                    "desktop dropped",
+                )
             self._sync_reconnect_all()
 
         def _on_security_failure(event) -> None:
@@ -1713,8 +1785,8 @@ class IguanaXterm(MainWindow):
         session = self._session(session_id)
         if session is None:
             return
-        if not session_caps(session.get("type"))["files"]:
-            self._toast("This connection has no file browser.", kind="warning")
+        if not self._caps(session)["files"]:
+            self._toast(self._no_files_reason(session), kind="warning")
             return
 
         existing = next(
@@ -2699,6 +2771,7 @@ class IguanaXterm(MainWindow):
                                     SelectOption(str(s["id"]), f"Through SSH session “{s['name']}”")
                                     for s in self._sessions
                                     if session_caps(s.get("type")).get("tunnel")
+                                    and not s.get("shared")
                                     and s["id"] != session_id
                                 ]),
                     FieldConfig(id="description", label="Description",
@@ -2809,6 +2882,253 @@ class IguanaXterm(MainWindow):
     # Account dialogs
     # ------------------------------------------------------------------
 
+    async def _assign_lists_dialog(self, user_id: int, username: str) -> None:
+        """Which of my site lists one account has, from the Users screen (#40)."""
+        current = await SiteListService().lists_for_async(user_id)
+        if not current.get("ok"):
+            self._toast(current.get("error", "User not found"), kind="error")
+            return
+        if not current["lists"]:
+            self._toast("Make a site list first (Site lists in the toolbar).", kind="warning")
+            return
+        done: asyncio.Future = asyncio.get_running_loop().create_future()
+        modal = ModalWindow(ModalConfig(title=f"Site lists for {username}", width=460, height=420))
+        form = Form(
+            FormConfig(
+                submit_text="Save",
+                fields=[FieldConfig(
+                    id="lists", label="Assigned", type="checkbox_group",
+                    value=[str(i) for i in current["assigned"]],
+                    options=[SelectOption(str(item["id"]), item["name"]) for item in current["lists"]],
+                )],
+            ),
+            container=modal.body,
+        )
+
+        async def _save(values: dict) -> None:
+            form.set_busy(True)
+            try:
+                chosen = [int(v) for v in (values.get("lists") or [])]
+                result = await SiteListService().assign_async(user_id, chosen)
+                if not result.get("ok"):
+                    form.set_error(None, result.get("error", "Failed"))
+                    return
+                modal.hide()
+                if not done.done():
+                    done.set_result(True)
+            finally:
+                form.set_busy(False)
+
+        form.on_submit(lambda values: _spawn(_save(values), "assign lists"))
+        modal.on_hide(lambda *_: done.done() or done.set_result(False))
+        modal.show()
+        await done
+
+    async def _lists_panel(self) -> None:
+        """Site lists (#40): build lists of sites and assign them to people."""
+        my_role = self._me.get("role")
+        if my_role not in ("admin", "power"):
+            self._toast("Only Admins and Power Users manage site lists.", kind="warning")
+            return
+        is_admin = my_role == "admin"
+
+        modal = ModalWindow(ModalConfig(title="Site lists", width=820, height=560))
+        modal.body.innerHTML = (
+            f'<div class="ix-admin">'
+            f'  <div class="ix-admin-table" id="ix-lists-table"></div>'
+            f'  <div class="ix-admin-form" id="ix-lists-form"></div>'
+            f"</div><style>{_ADMIN_CSS}</style>"
+        )
+        columns = [ColumnConfig(id="name", header="Name")]
+        if is_admin:
+            columns.append(ColumnConfig(id="owner", header="Owner", width=110))
+        columns += [
+            ColumnConfig(id="site_count", header="Sites", width=70, align="right"),
+            ColumnConfig(id="member_count", header="People", width=80, align="right"),
+            ColumnConfig(id="files_label", header="Files", width=70),
+        ]
+        table = DataTable(
+            DataTableConfig(
+                columns=columns,
+                selection="single",
+                empty_text="No site lists yet. Name one below to start.",
+                context_actions=[
+                    TableAction("edit", "Edit…", "mdi-pencil"),
+                    TableAction(separator=True),
+                    TableAction("delete", "Delete list", "mdi-delete", danger=True),
+                ],
+            ),
+            container=modal.body.querySelector("#ix-lists-table"),
+        )
+
+        async def _refresh() -> None:
+            rows = await SiteListService().list_async()
+            table.set_rows([
+                {**row, "files_label": "Allowed" if row.get("allow_files") else "—"}
+                for row in rows
+            ])
+
+        def _on_action(payload: dict) -> None:
+            list_id = int(payload.get("id"))
+            action = payload.get("action")
+
+            async def _run() -> None:
+                if action == "edit":
+                    await self._list_editor(list_id)
+                elif action == "delete":
+                    preview = await SiteListService().delete_preview_async(list_id)
+                    if not preview.get("ok"):
+                        self._toast(preview.get("error", "List not found"), kind="error")
+                        return
+                    people = preview.get("members") or 0
+                    text = f"Delete the site list “{preview.get('name')}”?"
+                    if people:
+                        text += (f" {people} {'person loses' if people == 1 else 'people lose'}"
+                                 " access to its sites, and anything they have open closes.")
+                    if not await message.confirm(text, title="Delete site list",
+                                                 ok_text="Delete", danger=True):
+                        return
+                    result = await SiteListService().delete_async(list_id)
+                    if not result.get("ok"):
+                        self._toast(result.get("error", "Could not delete"), kind="error")
+                await _refresh()
+
+            _spawn(_run(), f"site list {action}")
+
+        table.on_action(_on_action)
+        table.on_activate(lambda payload: _on_action({**payload, "action": "edit"}))
+
+        create_form = Form(
+            FormConfig(
+                columns=2,
+                submit_text="New list",
+                fields=[FieldConfig(id="name", label="New site list", required=True,
+                                    placeholder="Lab servers")],
+            ),
+            container=modal.body.querySelector("#ix-lists-form"),
+        )
+
+        async def _create(values: dict) -> None:
+            create_form.set_busy(True)
+            try:
+                result = await SiteListService().save_async(name=values.get("name", ""))
+                if not result.get("ok"):
+                    if result.get("errors"):
+                        create_form.set_errors(result["errors"])
+                    else:
+                        create_form.set_error(None, result.get("error", "Failed"))
+                    return
+                create_form.set_values({"name": ""})
+                await _refresh()
+            finally:
+                create_form.set_busy(False)
+            # Straight into choosing its sites and people.
+            await self._list_editor(int(result["id"]))
+            await _refresh()
+
+        create_form.on_submit(lambda values: _spawn(_create(values), "create site list"))
+        modal.show()
+        await _refresh()
+
+    async def _list_editor(self, list_id: int) -> None:
+        """One list: its name, the file switch, its sites and its people."""
+        current, candidates = await asyncio.gather(
+            SiteListService().get_async(list_id), SiteListService().candidates_async()
+        )
+        if not current.get("ok"):
+            self._toast(current.get("error", "List not found"), kind="error")
+            return
+        is_admin = self._me.get("role") == "admin"
+
+        def _site_label(site: dict) -> str:
+            where = site.get("folder") or UNSORTED
+            label = f"{where} / {site['name']}"
+            if is_admin and site.get("user_id") != self._me.get("user_id"):
+                label += f"  ({site.get('owner', '')})"
+            return label
+
+        sites = {site["id"]: site for site in candidates.get("sites", [])}
+        # A site already in the list stays offered even if this person
+        # couldn't add it now (an Admin's site in a list they now own).
+        for site in current.get("sites", []):
+            sites.setdefault(site["id"], site)
+        members = {member["id"]: member for member in candidates.get("members", [])}
+        for member in current.get("members", []):
+            members.setdefault(member["id"], member)
+
+        done: asyncio.Future = asyncio.get_running_loop().create_future()
+        modal = ModalWindow(ModalConfig(title=f"Site list: {current['name']}", width=640, height=640))
+        form = Form(
+            FormConfig(
+                columns=2,
+                submit_text="Save",
+                fields=[
+                    FieldConfig(id="name", label="Name", required=True, value=current["name"]),
+                    FieldConfig(id="allow_files", label="Allow file browser", type="toggle",
+                                value=current["allow_files"],
+                                help="Off: people get the terminal or desktop only."),
+                    FieldConfig(id="description", label="Description", type="textarea", span=2,
+                                value=current.get("description", "")),
+                    FieldConfig(
+                        id="sites", label="Sites", type="checkbox_group", span=2,
+                        value=[str(site["id"]) for site in current.get("sites", [])],
+                        options=[SelectOption(str(sid), _site_label(site))
+                                 for sid, site in sites.items()],
+                        help="" if sites else "You have no saved sites to add yet.",
+                    ),
+                    FieldConfig(
+                        id="members", label="Assigned to", type="checkbox_group", span=2,
+                        value=[str(member["id"]) for member in current.get("members", [])],
+                        options=[
+                            SelectOption(
+                                str(mid),
+                                member["username"] if member.get("role") == "user"
+                                else f"{member['username']} ({_ROLE_LABELS.get(member.get('role'), '')})",
+                            )
+                            for mid, member in members.items()
+                        ],
+                        help="" if members else "Create a User first (Users in the toolbar).",
+                    ),
+                ],
+            ),
+            container=modal.body,
+        )
+
+        async def _save(values: dict) -> None:
+            form.set_busy(True)
+            try:
+                service = SiteListService()
+                result = await service.save_async(
+                    list_id=list_id, name=values.get("name", ""),
+                    description=values.get("description", ""),
+                    allow_files=bool(values.get("allow_files")),
+                )
+                if result.get("ok"):
+                    result = await service.set_items_async(
+                        list_id, [int(v) for v in (values.get("sites") or [])]
+                    )
+                if result.get("ok"):
+                    result = await service.set_members_async(
+                        list_id, [int(v) for v in (values.get("members") or [])]
+                    )
+                if not result.get("ok"):
+                    if result.get("errors"):
+                        form.set_errors(result["errors"])
+                    else:
+                        form.set_error(None, result.get("error", "Failed"))
+                    return
+                modal.hide()
+                self._toast("Site list saved.", kind="success")
+                if not done.done():
+                    done.set_result(True)
+            finally:
+                form.set_busy(False)
+
+        form.on_submit(lambda values: _spawn(_save(values), "save site list"))
+        modal.on_hide(lambda *_: done.done() or done.set_result(False))
+        modal.show()
+        await done
+
     def _password_dialog(self) -> None:
         modal = ModalWindow(ModalConfig(title="Change password", width=440, height=360))
         form = Form(
@@ -2876,6 +3196,7 @@ class IguanaXterm(MainWindow):
         columns = [
             ColumnConfig(id="username", header="Username"),
             ColumnConfig(id="role_label", header="Role", width=110),
+            ColumnConfig(id="lists_label", header="Site lists"),
             ColumnConfig(id="session_count", header="Sites", width=70, align="right"),
             ColumnConfig(id="created_at", header="Created", width=110),
         ]
@@ -2892,6 +3213,7 @@ class IguanaXterm(MainWindow):
                 )
             ]
         actions += [
+            TableAction("assign", "Assign site lists…", "mdi-format-list-checks"),
             TableAction("reset", "Reset password", "mdi-lock-reset"),
             TableAction(separator=True),
             TableAction("delete", "Delete user", "mdi-delete", danger=True),
@@ -2903,13 +3225,17 @@ class IguanaXterm(MainWindow):
                 empty_text="No users" if is_admin else "You haven't created any Users yet",
                 context_actions=actions,
             ),
-            container=js.document.getElementById("ix-admin-table"),
+            container=modal.body.querySelector("#ix-admin-table"),
         )
 
         async def _refresh() -> None:
             users = await UserService().list_async()
             table.set_rows([
-                {**user, "role_label": _ROLE_LABELS.get(user.get("role"), user.get("role", ""))}
+                {
+                    **user,
+                    "role_label": _ROLE_LABELS.get(user.get("role"), user.get("role", "")),
+                    "lists_label": ", ".join(user.get("lists") or []),
+                }
                 for user in users
             ])
 
@@ -2944,6 +3270,10 @@ class IguanaXterm(MainWindow):
                     if not await _confirm_delete(service, int(user_id), row):
                         return
                     result = await service.delete_async(int(user_id))
+                elif action == "assign":
+                    await self._assign_lists_dialog(int(user_id), row.get("username", ""))
+                    await _refresh()
+                    return
                 elif action.startswith("role:"):
                     role = action.split(":", 1)[1]
                     if role == row.get("role"):
@@ -2985,13 +3315,20 @@ class IguanaXterm(MainWindow):
                 id="role", label="Role", type="select", value="user",
                 options=[SelectOption(key, _ROLE_LABELS[key]) for key in ("user", "power", "admin")],
             ))
+        # Setting up a User is one step: create them with their lists (#40).
+        my_lists = await SiteListService().list_async()
+        if my_lists:
+            fields.append(FieldConfig(
+                id="lists", label="Assign site lists", type="checkbox_group", span=3,
+                options=[SelectOption(str(item["id"]), item["name"]) for item in my_lists],
+            ))
         create_form = Form(
             FormConfig(
                 columns=3 if is_admin else 2,
                 submit_text="Add user",
                 fields=fields,
             ),
-            container=js.document.getElementById("ix-admin-form"),
+            container=modal.body.querySelector("#ix-admin-form"),
         )
 
         async def _create(values: dict) -> None:
@@ -3006,7 +3343,15 @@ class IguanaXterm(MainWindow):
                     else:
                         create_form.set_error(None, result.get("error", "Failed"))
                     return
-                create_form.set_values({"username": "", "password": ""})
+                chosen = [int(value) for value in (values.get("lists") or [])]
+                if chosen:
+                    assigned = await SiteListService().assign_async(result["id"], chosen)
+                    if not assigned.get("ok"):
+                        self._toast(assigned.get("error", "Could not assign the lists"), kind="error")
+                reset = {"username": "", "password": ""}
+                if my_lists:
+                    reset["lists"] = []
+                create_form.set_values(reset)
                 await _refresh()
             finally:
                 create_form.set_busy(False)
@@ -3293,6 +3638,9 @@ _SFTP_CSS = """
   .ix-queue-progress .wapyt-progress-value{min-width:64px;}
 }
 """
+
+# services/live.py REVOKED, which the relay sends when access is taken away.
+_ACCESS_REMOVED = "Access to this site was removed."
 
 # services/roles.py LABELS. Copied, not imported: that module is server-side.
 _ROLE_LABELS = {"admin": "Admin", "power": "Power User", "user": "User"}

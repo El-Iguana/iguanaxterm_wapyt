@@ -57,6 +57,21 @@ after a correct `release()`. The refcount is pinned by the unit tests in
 `tests/test_sftp_pool.py` instead, and the damage it prevents is an in-flight
 transfer dying, not a later listing.
 
+## Site lists smoke
+
+`site_lists_smoke.py` covers user tiers and site lists end to end (#38-#41):
+an Admin and a Power User each set up a User from nothing in the UI, the User
+gets a shell on an assigned site and is refused an unassigned one, each role
+sees the right sidebar, and taking the site out of the list closes the User's
+open terminal with "Access to this site was removed".
+
+It creates its own accounts, so it needs a **fresh** data dir (step 2 above
+with an empty `GANXTERM_DATA_DIR`):
+
+```bash
+python3 tests/smoke/site_lists_smoke.py
+```
+
 ## Maximize smoke
 
 `maximize_smoke.py` covers zooming a tile: it fills the workspace, sits on top,

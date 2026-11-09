@@ -27,7 +27,8 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from services import ssh as ssh_helpers
 from services import telnet as telnet_proto
 from services.auth import current_user_id
-from services.db import fetch_session, get_db
+from services import live
+from services.access import host_key_message, pin_host_key, resolve_site
 from services.paths import session_caps
 
 logger = logging.getLogger("iguanaxterm.terminal")
@@ -64,16 +65,13 @@ def _same_origin(ws: WebSocket) -> bool:
     return urlsplit(origin).netloc == host
 
 
-def _persist_host_key(session_id: int, user_id: int):
-    def _store(serialized: str) -> None:
-        with get_db() as conn:
-            conn.execute(
-                "UPDATE sessions SET host_key = ? "
-                "WHERE id = ? AND user_id = ? AND host_key = ''",
-                (serialized, session_id, user_id),
-            )
-
-    return _store
+async def _revoke(ws: WebSocket, reason: str) -> None:
+    """End a terminal whose person just lost access to its site (#41)."""
+    try:
+        await _send(ws, "error", reason)
+        await ws.close(code=CLOSE_FORBIDDEN)
+    except Exception:
+        pass   # already closing
 
 
 @router.websocket("/ws/terminal/{session_id}")
@@ -89,10 +87,12 @@ async def terminal(websocket: WebSocket, session_id: int) -> None:
         await websocket.close(code=CLOSE_UNAUTHENTICATED)
         return
 
-    profile = fetch_session(int(session_id), user_id)
-    if profile is None:
+    # The one access check (#38): owned, or assigned through a site list.
+    resolved = resolve_site(int(session_id), user_id)
+    if resolved is None:
         await websocket.close(code=CLOSE_NOT_FOUND)
         return
+    profile, access = resolved
 
     await websocket.accept()
 
@@ -103,22 +103,28 @@ async def terminal(websocket: WebSocket, session_id: int) -> None:
         await websocket.close()
         return
 
-    if profile.get("type") == "telnet":
-        await _relay_telnet(websocket, profile)
-    else:
-        await _relay_ssh(websocket, profile, user_id)
+    loop = asyncio.get_running_loop()
+    token = live.register(
+        user_id, int(session_id), "terminal",
+        lambda reason: asyncio.run_coroutine_threadsafe(_revoke(websocket, reason), loop),
+    )
+    try:
+        if profile.get("type") == "telnet":
+            await _relay_telnet(websocket, profile)
+        else:
+            await _relay_ssh(websocket, profile, access)
+    finally:
+        live.unregister(token)
 
 
 # ── SSH ───────────────────────────────────────────────────────────────────────
 
 
-async def _relay_ssh(ws: WebSocket, profile: dict, user_id: int) -> None:
+async def _relay_ssh(ws: WebSocket, profile: dict, access: dict) -> None:
     loop = asyncio.get_running_loop()
 
     def _open() -> tuple[paramiko.SSHClient, paramiko.Channel]:
-        client = ssh_helpers.connect(
-            profile, on_learn_host_key=_persist_host_key(profile["id"], user_id)
-        )
+        client = ssh_helpers.connect(profile, on_learn_host_key=pin_host_key(profile["id"]))
         channel = client.invoke_shell(term="xterm-256color", width=80, height=24)
         # Blocking reads: this channel is consumed by a dedicated thread. The
         # dhxpyt rewrite set settimeout(0) here, which makes recv() raise
@@ -130,7 +136,7 @@ async def _relay_ssh(ws: WebSocket, profile: dict, user_id: int) -> None:
     try:
         client, channel = await loop.run_in_executor(None, _open)
     except ssh_helpers.HostKeyChanged as exc:
-        await _send(ws, "error", str(exc))
+        await _send(ws, "error", host_key_message(exc, access))
         await ws.close(code=CLOSE_FORBIDDEN)
         return
     except Exception as exc:

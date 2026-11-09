@@ -1,0 +1,70 @@
+# Throwaway RDP target for rdp_smoke.py and the relay tests. Weak, fixed
+# credentials on purpose: it listens on loopback only and is torn down after.
+#
+#   :3389  xrdp (TLS), testuser/testpass       -- published: the "direct" case
+#   :3390  the same xrdp, via socat, bound to the container's loopback
+#          -- NOT published: reachable only through an SSH tunnel
+#   :22    sshd, testuser/testpass, TCP forwarding on -- the tunnel
+#
+# The desktop is Xfce, with a terminal opened maximized at login so typed
+# commands land somewhere a test can check (podman exec). xclip lets a test
+# set and read the remote clipboard directly.
+#
+# Ctrl+Alt+Del is bound to `touch /tmp/cad-pressed`, so a test can tell the
+# keys reached the session. xrdp has no NLA (CredSSP), so security=nla is
+# refused: that is the "login refused" case.
+#
+# /rotate-cert.sh replaces xrdp's certificate and restarts it, for the
+# "certificate changed" test.
+FROM docker.io/library/debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        xrdp xorgxrdp xfce4 xfce4-terminal dbus-x11 xclip socat openssh-server \
+        openssl ssl-cert procps fonts-dejavu-core \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
+    && useradd -m -s /bin/bash testuser \
+    && echo 'testuser:testpass' | chpasswd \
+    && adduser xrdp ssl-cert \
+    && mkdir -p /run/sshd \
+    && sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config \
+    && sed -i 's/^#*AllowTcpForwarding.*/AllowTcpForwarding yes/' /etc/ssh/sshd_config \
+    && sed -i 's/^security_layer=.*/security_layer=tls/' /etc/xrdp/xrdp.ini \
+    && echo 'startxfce4' > /home/testuser/.xsession \
+    && mkdir -p /home/testuser/.config/autostart \
+        /home/testuser/.config/xfce4/xfconf/xfce-perchannel-xml \
+    && printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Terminal' \
+        'Exec=xfce4-terminal --maximize' > /home/testuser/.config/autostart/terminal.desktop \
+    && printf '%s\n' '[Desktop Entry]' 'Hidden=true' > /home/testuser/.config/autostart/xscreensaver.desktop \
+    && printf '%s\n' \
+        '<?xml version="1.0" encoding="UTF-8"?>' \
+        '<channel name="xfce4-keyboard-shortcuts" version="1.0">' \
+        '  <property name="commands" type="empty">' \
+        '    <property name="custom" type="empty">' \
+        '      <property name="&lt;Primary&gt;&lt;Alt&gt;Delete" type="string" value="touch /tmp/cad-pressed"/>' \
+        '      <property name="override" type="bool" value="true"/>' \
+        '    </property>' \
+        '  </property>' \
+        '</channel>' > /home/testuser/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-keyboard-shortcuts.xml \
+    && chown -R testuser:testuser /home/testuser \
+    && printf '%s\n' \
+        '#!/bin/sh' \
+        'openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=rdp-target-$(date +%s)" \' \
+        '  -keyout /etc/xrdp/key.pem -out /etc/xrdp/cert.pem 2>/dev/null' \
+        'chmod 640 /etc/xrdp/key.pem && chgrp ssl-cert /etc/xrdp/key.pem' \
+        'pkill -x xrdp; sleep 0.5; /usr/sbin/xrdp' > /rotate-cert.sh \
+    && chmod +x /rotate-cert.sh \
+    && printf '%s\n' \
+        '#!/bin/sh' \
+        'set -e' \
+        '[ -s /etc/xrdp/cert.pem ] && [ ! -L /etc/xrdp/cert.pem ] || /rotate-cert.sh >/dev/null 2>&1 || true' \
+        'rm -f /var/run/xrdp/*.pid /run/xrdp/*.pid' \
+        '/usr/sbin/xrdp-sesman' \
+        'pgrep -x xrdp >/dev/null || /usr/sbin/xrdp' \
+        'socat TCP-LISTEN:3390,bind=127.0.0.1,fork,reuseaddr TCP:127.0.0.1:3389 &' \
+        'exec /usr/sbin/sshd -D -e' > /start.sh \
+    && chmod +x /start.sh
+
+EXPOSE 22 3389
+CMD ["/start.sh"]

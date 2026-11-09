@@ -10,6 +10,11 @@
 # To have them land in a folder on this computer instead: with Docker, add
 # compose.downloads.yaml; with Podman on Linux, use the podman run command in
 # INSTALL.md ("Saving folders to this computer").
+#
+# Two services: IguanaXterm, and guacd (Apache Guacamole's proxy) for RDP
+# desktops. guacd has NO login of its own: anyone who can reach its port can
+# make it connect anywhere. So it has no `ports:` and is reachable only by
+# IguanaXterm over this file's private network. Never publish it.
 
 name: iguanaxterm
 
@@ -34,6 +39,10 @@ services:
       # (INSTALL.md, "Reaching IguanaXterm from other machines").
       GANXTERM_CANONICAL_ORIGIN: ${GANXTERM_CANONICAL_ORIGIN:-http://127.0.0.1:${GANXTERM_PORT:-8765}}
       GANXTERM_ALLOWED_HOSTS: ${GANXTERM_ALLOWED_HOSTS:-}
+      # RDP desktops, through the guacd service below. Unset it to switch RDP off.
+      GANXTERM_GUACD: ${GANXTERM_GUACD:-guacd:4822}
+    depends_on:
+      - guacd
     ports:
       # 127.0.0.1 on purpose: pytincture only serves authenticated plain HTTP
       # to a loopback address, and this holds your SSH credentials.
@@ -50,6 +59,18 @@ services:
       timeout: 5s
       start_period: 40s
       retries: 3
+
+  guacd:
+    # Pinned by version and digest; guacamole-common-js in
+    # appcode/vendor/guacamole is the same version. Bump both together.
+    image: docker.io/guacamole/guacd:1.6.0@sha256:8974eaa9ba32f713daf311e7cc8cd7e4cdfba1edea39eed75524e78ef4b08f4f
+    container_name: iguanaxterm-guacd
+    hostname: guacd
+    labels:
+      app: IguanaXterm
+    restart: unless-stopped
+    # No ports: on purpose (see the top of this file). IguanaXterm's
+    # healthcheck stays on the app alone: guacd down disables RDP, nothing else.
 
 volumes:
   iguanaxterm-data:

@@ -12,6 +12,10 @@
 # IguanaXterm then binds to 127.0.0.1 itself, so it is still not on the
 # network. Docker Desktop (Windows, macOS) and Podman machines run containers
 # in a VM, where host networking means the VM's network: use compose.yaml.
+#
+# guacd (for RDP) shares the host network too, so it is started bound to
+# 127.0.0.1 explicitly: the image's own default is 0.0.0.0, which here would
+# put an unauthenticated proxy on your LAN. Never change that.
 
 name: iguanaxterm
 
@@ -35,6 +39,9 @@ services:
       PORT: ${GANXTERM_PORT:-8765}
       GANXTERM_CANONICAL_ORIGIN: ${GANXTERM_CANONICAL_ORIGIN:-http://127.0.0.1:${GANXTERM_PORT:-8765}}
       GANXTERM_ALLOWED_HOSTS: ${GANXTERM_ALLOWED_HOSTS:-}
+      GANXTERM_GUACD: ${GANXTERM_GUACD:-127.0.0.1:4822}
+    depends_on:
+      - guacd
     volumes:
       - iguanaxterm-data:/data
     healthcheck:
@@ -43,6 +50,16 @@ services:
       timeout: 5s
       start_period: 40s
       retries: 3
+
+  guacd:
+    image: docker.io/guacamole/guacd:1.6.0@sha256:8974eaa9ba32f713daf311e7cc8cd7e4cdfba1edea39eed75524e78ef4b08f4f
+    container_name: iguanaxterm-guacd
+    labels:
+      app: IguanaXterm
+    restart: unless-stopped
+    network_mode: host
+    # Loopback only (see the top of this file).
+    entrypoint: ["/opt/guacamole/sbin/guacd", "-f", "-b", "127.0.0.1", "-l", "4822", "-L", "info"]
 
 volumes:
   iguanaxterm-data:

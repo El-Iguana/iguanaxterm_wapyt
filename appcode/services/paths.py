@@ -253,7 +253,47 @@ SESSION_TYPES = {
             "desktop": False, "tunnel": False},
     "vnc": {"label": "VNC (remote desktop)", "port": 5900, "terminal": False, "files": False,
             "desktop": True, "tunnel": False},
+    # Offered only where guacd is set up (GANXTERM_GUACD, #55); see guacd.py.
+    "rdp": {"label": "RDP (Windows desktop)", "port": 3389, "terminal": False, "files": False,
+            "desktop": True, "tunnel": False},
 }
+
+# The RDP settings a site can carry in sessions.options (#56). Shared with the
+# browser for the editor; validated by SessionService.
+RDP_SECURITY = (
+    ("any", "Negotiate (default)"),
+    ("nla", "NLA (Network Level Authentication)"),
+    ("tls", "TLS"),
+    ("rdp", "RDP security (legacy: weak, no certificate to check)"),
+)
+RDP_RESIZE = (
+    ("display-update", "Follow the pane (display update)"),
+    ("reconnect", "Follow the pane (reconnect)"),
+    ("none", "Fixed size"),
+)
+# guacd's server-layout values: the keyboard layout of the remote session.
+RDP_KEYBOARDS = (
+    ("en-us-qwerty", "English (US)"),
+    ("en-gb-qwerty", "English (UK)"),
+    ("de-de-qwertz", "German"),
+    ("de-ch-qwertz", "German (Switzerland)"),
+    ("fr-fr-azerty", "French"),
+    ("fr-be-azerty", "French (Belgium)"),
+    ("fr-ch-qwertz", "French (Switzerland)"),
+    ("es-es-qwerty", "Spanish"),
+    ("es-latam-qwerty", "Spanish (Latin America)"),
+    ("it-it-qwerty", "Italian"),
+    ("pt-br-qwerty", "Portuguese (Brazil)"),
+    ("pt-pt-qwerty", "Portuguese"),
+    ("sv-se-qwerty", "Swedish"),
+    ("da-dk-qwerty", "Danish"),
+    ("no-no-qwerty", "Norwegian"),
+    ("fi-fi-qwerty", "Finnish"),
+    ("hu-hu-qwertz", "Hungarian"),
+    ("tr-tr-qwerty", "Turkish"),
+    ("ja-jp-qwerty", "Japanese"),
+    ("failsafe", "Unicode (any layout, fallback)"),
+)
 
 
 def session_caps(session_type: str | None) -> dict:
@@ -268,6 +308,7 @@ def session_icon(session_type: str) -> str:
         "sftp": "mdi-folder-key-network",
         "ftp": "mdi-folder-network-outline",
         "vnc": "mdi-monitor",
+        "rdp": "mdi-microsoft-windows",
     }.get(session_type, "mdi-server")
 
 

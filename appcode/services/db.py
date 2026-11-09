@@ -178,6 +178,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     description TEXT    NOT NULL DEFAULT '',
     host_key    TEXT    NOT NULL DEFAULT '',
     via_session_id INTEGER NOT NULL DEFAULT 0,
+    -- Per-protocol settings as JSON (RDP's domain, security, ..., #56), so a
+    -- new protocol doesn't add columns. Never holds a secret.
+    options     TEXT    NOT NULL DEFAULT '{}',
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -244,6 +247,8 @@ def init_db() -> None:
             # The private key's passphrase, encrypted (2.1.1). ssh.py always
             # asked for one; nothing stored it, so encrypted keys never worked.
             ("passphrase", "TEXT NOT NULL DEFAULT ''"),
+            # Per-protocol settings, JSON (2.4.0, RDP).
+            ("options", "TEXT NOT NULL DEFAULT '{}'"),
         ):
             if column not in existing:
                 conn.execute(f"ALTER TABLE sessions ADD COLUMN {column} {definition}")

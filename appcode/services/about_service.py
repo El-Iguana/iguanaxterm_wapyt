@@ -23,3 +23,11 @@ class AboutService:
         from services.release_check import latest_release
 
         return {"ok": True, **latest_release()}
+
+    def rdp(self) -> dict:
+        """Whether RDP desktops work here: "ready", "unreachable" or "off" (#55)."""
+        if not self._user_id:
+            return {"ok": False, "error": "Not authenticated"}
+        from services.guacd import status
+
+        return {"ok": True, "status": status()}

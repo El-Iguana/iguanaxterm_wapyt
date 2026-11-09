@@ -29,6 +29,12 @@ NAME=iguanaxterm
 IMAGE=localhost/iguanaxterm
 PORT="${PORT:-8765}"
 VOLUME=ganxterm_data
+# guacd, for RDP desktops: on the host network too, so bound to 127.0.0.1
+# explicitly. The image's default (0.0.0.0) would put an unauthenticated proxy
+# on the LAN. Same image and pin as compose.yaml.
+GUACD_NAME=iguanaxterm-guacd
+GUACD_IMAGE="docker.io/guacamole/guacd:1.6.0@sha256:8974eaa9ba32f713daf311e7cc8cd7e4cdfba1edea39eed75524e78ef4b08f4f"
+GUACD_PORT="${GUACD_PORT:-4822}"
 # Folder downloads the browser cannot write itself are saved here, one
 # subdirectory per user. A dedicated folder, not ~/Downloads itself: the :z
 # below relabels it for SELinux.
@@ -54,6 +60,16 @@ podman build --build-context "wapyt-src=$CONTEXT" \
 
 mkdir -p "$DOWNLOADS"
 
+echo "==> restarting $GUACD_NAME (127.0.0.1:$GUACD_PORT)"
+podman rm -f "$GUACD_NAME" >/dev/null 2>&1 || true
+podman run -d \
+  --name "$GUACD_NAME" \
+  --restart unless-stopped \
+  --label app=IguanaXterm \
+  --network host \
+  --entrypoint /opt/guacamole/sbin/guacd \
+  "$GUACD_IMAGE" -f -b 127.0.0.1 -l "$GUACD_PORT" -L info >/dev/null
+
 echo "==> restarting $NAME"
 podman rm -f "$NAME" >/dev/null 2>&1 || true
 podman run -d \
@@ -69,6 +85,7 @@ podman run -d \
   -e GANXTERM_DATA_DIR=/data \
   -e "GANXTERM_CANONICAL_ORIGIN=http://127.0.0.1:$PORT" \
   -e GANXTERM_DOWNLOAD_DIR=/downloads \
+  -e "GANXTERM_GUACD=127.0.0.1:$GUACD_PORT" \
   -e "GANXTERM_DOWNLOAD_HOST_DIR=${DOWNLOADS/#$HOME/\~}" \
   -v "$VOLUME:/data:U" \
   -v "$DOWNLOADS:/downloads:z" \

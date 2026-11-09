@@ -399,8 +399,9 @@ To restore, stop IguanaXterm, run the same command with
 docker compose exec -it iguanaxterm python manage.py reset-password admin
 ```
 
-It asks for the new password twice. `manage.py users` lists the accounts;
-`reset-password NAME --create` makes a new administrator.
+It asks for the new password twice. `manage.py users` lists the accounts and
+their roles; `reset-password NAME --create` makes a new administrator, and
+`set-role NAME admin` (or `power`, `user`) changes someone's role.
 
 **Uninstall**
 

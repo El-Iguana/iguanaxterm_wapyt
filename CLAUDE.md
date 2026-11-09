@@ -67,7 +67,7 @@ Installing (users): **INSTALL.md** — `compose.yaml` on any OS with Docker or
 Podman, `compose.host-network.yaml` on Linux, `compose.downloads.yaml` (Docker)
 or a `podman run` recipe (Podman on Linux) to save folders to a host folder.
 `manage.py` is the admin CLI (`health`, `probe HOST PORT`, `users`,
-`reset-password`).
+`set-role USER admin|power|user`, `reset-password`).
 
 ### How the image is built (2026-09-26)
 
@@ -229,7 +229,7 @@ cookie, plus whatever `AUTH_SESSION_CLAIM_KEYS` names. Anything else the
 authenticator returns is **silently dropped**. Without
 
 ```python
-"AUTH_SESSION_CLAIM_KEYS": "user_id,is_admin,username",
+"AUTH_SESSION_CLAIM_KEYS": "user_id,role,is_admin,username",
 ```
 
 every BFF call fails with `403 BFF policy denied the operation` and nothing
@@ -588,6 +588,32 @@ on (see "Cookie names" above).
   only rejects `/`. `tests/test_windows_local_names.py` forces the Windows
   mapping on Linux.
 - Key files are written with `O_BINARY`; tests read sources as UTF-8.
+
+### Roles: Admin, Power User, User (2.3.0, #34)
+
+`users.role` is `admin`, `power` or `user` (`services/roles.py`, a CHECK
+constraint in the table). `users.created_by` records who made an account
+(NULL for the seeded admin, console-made accounts and older rows).
+
+- **Upgrading:** `init_db` adds both columns; `is_admin = 1` becomes `admin`
+  and **every other account becomes `power`**, so nobody loses their sites.
+- **`is_admin` is kept in step for one release** (`db.set_role` writes both;
+  so do the seed and `manage.py`). The Users screen still reads it until
+  #35. Drop the column, the claim and `UserService.set_admin` after that.
+- **Claims:** `role`, `is_admin`, and `roles` = the role plus everything below
+  it (`["admin","power","user"]`, `["power","user"]`, `["user"]`).
+  pytincture's `@bff_policy(roles=...)` needs *every* listed role present
+  (`issubset`), so `roles={"power"}` means Power User or above.
+- **`@bff_policy(min_role="power")`** is the app's own check in
+  `auth.policy_hook`; an unknown value denies. `admin_required=True` still
+  works as the old spelling of `min_role="admin"`.
+- **A session signed in before 2.3.0 has no `role` claim.** `roles.role_of`
+  gives it `admin` from `is_admin`, otherwise `user`, until it signs in again,
+  so a migrated Power User may be refused Power User calls until they sign in
+  again. Nothing gains rights.
+- Last-admin guards count `role = 'admin'` (`db.admin_count`).
+- `@backend_for_frontend` replaces the class: read method policies in tests
+  from `UserService._pytincture_bff_original`. `tests/test_roles.py`.
 
 ### Default password and the reminder (2026-09-29)
 

@@ -149,7 +149,13 @@ CREATE TABLE IF NOT EXISTS users (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     username   TEXT    NOT NULL UNIQUE COLLATE NOCASE,
     pw_hash    TEXT    NOT NULL,
+    -- 'admin', 'power' or 'user' (services/roles.py). is_admin is kept equal
+    -- to role = 'admin' for one release, for anything still reading it.
+    role       TEXT    NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'power', 'user')),
     is_admin   INTEGER NOT NULL DEFAULT 0,
+    -- Who created the account. NULL for the first admin, for accounts made
+    -- at the console, and for accounts that predate the column.
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
     -- 1 while the password is one this person did not choose: the install
     -- default, or one an administrator set. The app asks them to change it
     -- on every load until they do.
@@ -224,13 +230,30 @@ def init_db() -> None:
                 if any(verify_password(known, row["pw_hash"]) for known in _KNOWN_DEFAULTS):
                     conn.execute("UPDATE users SET must_change_pw = 1 WHERE id = ?", (row["id"],))
 
+        if "role" not in users:
+            # 2.3.0: roles replace is_admin. Admins stay Admin and every other
+            # account becomes a Power User, so nobody loses their saved sites.
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user' "
+                "CHECK (role IN ('admin', 'power', 'user'))"
+            )
+            conn.execute(
+                "UPDATE users SET role = CASE WHEN is_admin = 1 THEN 'admin' ELSE 'power' END"
+            )
+        if "created_by" not in users:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN created_by INTEGER "
+                "REFERENCES users(id) ON DELETE SET NULL"
+            )
+
         if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
             admin_user = os.environ.get("GANXTERM_ADMIN_USER", "admin")
             from_env = os.environ.get("GANXTERM_ADMIN_PASS", "")
             admin_pass = from_env or DEFAULT_ADMIN_PASSWORD
             # Flagged either way: nobody chose this password in the app.
             conn.execute(
-                "INSERT INTO users (username, pw_hash, is_admin, must_change_pw) VALUES (?, ?, 1, 1)",
+                "INSERT INTO users (username, pw_hash, role, is_admin, must_change_pw) "
+                "VALUES (?, ?, 'admin', 1, 1)",
                 (admin_user, hash_password(admin_pass)),
             )
             source = (
@@ -276,6 +299,29 @@ def _migrate_plaintext_credentials(conn: sqlite3.Connection) -> None:
         )
     if rows:
         print(f"  Encrypted credentials for {len(rows)} saved session(s).", flush=True)
+
+
+def set_role(conn: sqlite3.Connection, user_id: int, role: str) -> bool:
+    """
+    Change an account's role, keeping ``is_admin`` in step. False when no such
+    account. Callers do the permission and last-admin checks.
+    """
+    from services.roles import ADMIN, is_role
+
+    if not is_role(role):
+        raise ValueError(f"unknown role {role!r}")
+    cursor = conn.execute(
+        "UPDATE users SET role = ?, is_admin = ? WHERE id = ?",
+        (role, int(role == ADMIN), int(user_id)),
+    )
+    return cursor.rowcount > 0
+
+
+def admin_count(conn: sqlite3.Connection, excluding: int = 0) -> int:
+    """How many Admins there are, not counting ``excluding``."""
+    return conn.execute(
+        "SELECT COUNT(*) FROM users WHERE role = 'admin' AND id <> ?", (int(excluding),)
+    ).fetchone()[0]
 
 
 def fetch_session(session_id: int, user_id: int) -> Optional[dict]:

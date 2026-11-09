@@ -222,7 +222,7 @@ def build_app():
         # a fixed set plus whatever AUTH_SESSION_CLAIM_KEYS names. Without this
         # the BFF services see no user_id and every call is denied 403 — with
         # "BFF policy denied the operation" and nothing to say why.
-        "AUTH_SESSION_CLAIM_KEYS": "user_id,is_admin,username",
+        "AUTH_SESSION_CLAIM_KEYS": "user_id,role,is_admin,username",
     }
 
     origin = canonical_origin()

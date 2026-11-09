@@ -2855,7 +2855,7 @@ class IguanaXterm(MainWindow):
             DataTableConfig(
                 columns=[
                     ColumnConfig(id="username", header="Username"),
-                    ColumnConfig(id="role", header="Role", width=90),
+                    ColumnConfig(id="role", header="Role", width=110),
                     ColumnConfig(id="session_count", header="Sessions", width=90, align="right"),
                     ColumnConfig(id="created_at", header="Created", width=110),
                 ],
@@ -2874,7 +2874,8 @@ class IguanaXterm(MainWindow):
         async def _refresh() -> None:
             users = await UserService().list_async()
             table.set_rows(
-                [{**user, "role": "admin" if user["is_admin"] else "user"} for user in users]
+                [{**user, "role": _ROLE_LABELS.get(user.get("role"), user.get("role", ""))}
+                 for user in users]
             )
 
         def _on_action(payload: dict) -> None:
@@ -3234,6 +3235,9 @@ _SFTP_CSS = """
   .ix-queue-progress .wapyt-progress-value{min-width:64px;}
 }
 """
+
+# services/roles.py LABELS. Copied, not imported: that module is server-side.
+_ROLE_LABELS = {"admin": "Admin", "power": "Power User", "user": "User"}
 
 _ADMIN_CSS = """
 .ix-admin{display:flex;flex-direction:column;height:100%;min-height:0;gap:10px;}

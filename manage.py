@@ -5,6 +5,7 @@ IguanaXterm administration from the command line.
     python manage.py health                  # exit 0 when the app answers
     python manage.py probe host.docker.internal 22       # can the app reach it?
     python manage.py users                   # list accounts
+    python manage.py set-role alice power    # admin, power or user
     python manage.py reset-password admin    # prompts for the new password
     python manage.py reset-password alice --create   # …or makes an admin
 
@@ -94,11 +95,28 @@ def users() -> int:
     init_db()
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT username, is_admin, created_at FROM users ORDER BY username COLLATE NOCASE"
+            "SELECT username, role, created_at FROM users ORDER BY username COLLATE NOCASE"
         ).fetchall()
     for row in rows:
-        role = "admin" if row["is_admin"] else "user"
-        print(f"{row['username']:<24} {role:<6} created {row['created_at']}")
+        print(f"{row['username']:<24} {row['role']:<6} created {row['created_at']}")
+    return 0
+
+
+def set_role_command(username: str, role: str) -> int:
+    """Change a role from the console, e.g. to get an Admin back."""
+    from services.db import admin_count, get_db, init_db, set_role
+
+    init_db()
+    with get_db() as conn:
+        row = conn.execute("SELECT id, role FROM users WHERE username = ?", (username,)).fetchone()
+        if row is None:
+            print(f"No user {username!r}.", file=sys.stderr)
+            return 1
+        if row["role"] == "admin" and role != "admin" and admin_count(conn, excluding=row["id"]) == 0:
+            print(f"{username} is the last admin; make someone else admin first.", file=sys.stderr)
+            return 1
+        set_role(conn, row["id"], role)
+    print(f"{username} is now {role}.")
     return 0
 
 
@@ -130,7 +148,7 @@ def reset_password(username: str, create: bool, from_stdin: bool) -> int:
             print(f"No user {username!r}; add --create to make an administrator.", file=sys.stderr)
             return 1
         conn.execute(
-            "INSERT INTO users (username, pw_hash, is_admin) VALUES (?, ?, 1)",
+            "INSERT INTO users (username, pw_hash, role, is_admin) VALUES (?, ?, 'admin', 1)",
             (username, hash_password(password)),
         )
     print(f"Created administrator {username}.")
@@ -146,6 +164,9 @@ def main(argv: list[str] | None = None) -> int:
     probe_cmd.add_argument("host")
     probe_cmd.add_argument("port", type=int)
     commands.add_parser("users", help="list accounts")
+    role_cmd = commands.add_parser("set-role", help="change an account's role")
+    role_cmd.add_argument("username")
+    role_cmd.add_argument("role", choices=["admin", "power", "user"])
     reset = commands.add_parser("reset-password", help="set a user's password")
     reset.add_argument("username")
     reset.add_argument("--create", action="store_true", help="create an administrator if missing")
@@ -157,6 +178,8 @@ def main(argv: list[str] | None = None) -> int:
         return probe(args.host, args.port)
     if args.command == "users":
         return users()
+    if args.command == "set-role":
+        return set_role_command(args.username, args.role)
     return reset_password(args.username, args.create, args.password_stdin)
 
 

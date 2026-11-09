@@ -23,7 +23,7 @@ import sqlite3
 from pytincture.dataclass import backend_for_frontend, bff_policy
 
 from services.auth import current_user_id
-from services.db import admin_count, get_db, hash_password, set_role, verify_password
+from services.db import admin_count, current_role, get_db, hash_password, set_role, verify_password
 from services.roles import ADMIN, LABELS, POWER, USER, at_least, is_role, role_of
 
 MIN_PASSWORD_LENGTH = 8
@@ -96,8 +96,7 @@ class UserService:
 
     def _caller_role(self, conn: sqlite3.Connection) -> str:
         """The caller's role as the database has it now; "" if the account is gone."""
-        row = conn.execute("SELECT role FROM users WHERE id = ?", (self._user_id,)).fetchone()
-        return row["role"] if row else ""
+        return current_role(conn, self._user_id)
 
     def _managed(self, conn: sqlite3.Connection, user_id: int):
         """

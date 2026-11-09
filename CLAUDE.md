@@ -631,6 +631,18 @@ constraint in the table). `users.created_by` records who made an account
   in #37.
 - The Users button is hidden for Users; a Power User's dialog is "My Users",
   with no role picker and no "Created by" column.
+
+**Users can't change sites (#36).** `SessionService.save`, `delete` and
+`clear_host_key` refuse unless `db.current_role` is Power User or above
+(the database again, not the session); `folders()` is empty for Users. The
+first-connect host-key pin is not an edit and still happens. `list()` marks
+each site `editable`; the tree carries it as the node flag `editable`, and
+Edit / Forget host key / Delete are `TreeAction(requires=["editable"])`, so
+#39's shared sites reuse the same flag. For Users the toolbar hides New, Edit,
+Delete and Users, and the empty tree says "No sites have been shared with you
+yet." A BFF call made by hand is `POST /iguanaxterm/classcall/services/<module>.py/<Class>/<method>`
+with `{"args": [...], "kwargs": {...}}` and the page's CSRF header; that is
+how the refusal was checked from a User's browser session.
 - `@backend_for_frontend` replaces the class: read method policies in tests
   from `UserService._pytincture_bff_original`. `tests/test_roles.py`.
 

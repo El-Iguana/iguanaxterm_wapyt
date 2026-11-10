@@ -57,6 +57,7 @@ appcode/                # pytincture modules_path
   services/guacd.py     #   GANXTERM_GUACD, status, the guacd handshake
   services/rdp_ws.py    #   /ws/rdp/<id>: the RDP relay, tunnel listener, cert pin
   services/rdp_cert.py  #   X.224 + TLS probe for the RDP certificate
+  services/drive.py     #   RDP shared drives: folders, DriveFiles (plain module)
   static/rdp-pane.js    #   IxRDP: guacamole-common-js behind noVNC's RFB surface
   vendor/guacamole/     #   guacamole-common-js 1.6.0 — served at /guacamole
   vendor/xterm/         #   vendored xterm.js — served at /xterm
@@ -521,6 +522,34 @@ browser (guacamole-common-js) ⇄ /ws/rdp/<id> ⇄ rdp_ws.py ⇄ TCP ⇄ guacd �
   `rdp_cert.thumbprint`) guacd gets `ignore-cert=true`, and the gateway pin is
   enforced only by our probe just before connecting. guacd 1.6 has no
   gateway-certificate parameter of its own.
+- **Shared drive (#76):** `services/drive.py`, a plain module. Folder
+  `GANXTERM_DRIVE_DIR/<user_id>/<session_id>`, ids only, `realpath`-checked;
+  guacd gets `GANXTERM_GUACD_DRIVE_DIR` (default the same path) +
+  `enable-drive`, `drive-name` "IguanaXterm", made by IguanaXterm first.
+  `DriveFiles` answers the SFTPClient slice the file browser and transfers
+  call (like `FTPFiles`); `pool._dial` returns it for `rdp`, so Files,
+  uploads, range downloads and server-side saves all work unchanged. It
+  resolves every path inside the folder, refuses links out (and doesn't list
+  links), and enforces `GANXTERM_DRIVE_MAX_BYTES` (2 GiB) on IguanaXterm's
+  writes only: Windows can write past it. `drive_upload` False refuses every
+  change from IguanaXterm, `drive_download` False refuses reads. guacd's own
+  file channel is always shut (`disable-download`/`-upload`), so files move
+  only through Files. `drive.has_files()` drives the site list's `files`
+  flag, so an RDP pane gets a Files tab next to Desktop. Deleting a site
+  removes everyone's folder for it; deleting an account removes theirs.
+  **Ownership, measured:** guacd writes files 0600 as its own uid, so it runs
+  as the app's `10001:999` with `HOME=/tmp` (FreeRDP warns about an
+  unwritable home otherwise). In `podman-run.sh` guacd also gets the app's
+  `--userns=keep-id:uid=10001,gid=999`, or the two 10001s would be different
+  host users. Compose: the app image has `/drives` owned 10001:999 (0770) and
+  guacd now `depends_on` the app (not the other way round), so a new
+  `iguanaxterm-drives` volume is first mounted by the app and copies that
+  owner; started the other way it would be root's and nobody could write.
+  Checked: a fresh volume comes up `10001 999 0770`, and each side reads and
+  deletes the other's files. **xrdp shows the drive as
+  `~/thinclient_drives/GUACFS`** (FUSE; the target needs `fuse3` and runs with
+  `--device /dev/fuse --cap-add SYS_ADMIN`); Windows shows the drive-name.
+  Idle cleanup isn't built.
 - **No multi-monitor:** guacd 1.6's `args` has no monitor or span parameter,
   and display updates send one primary monitor.
 - **guacd reports some failures after `ready`** (NLA against xrdp: `error
@@ -561,7 +590,8 @@ browser (guacamole-common-js) ⇄ /ws/rdp/<id> ⇄ rdp_ws.py ⇄ TCP ⇄ guacd �
 - Tests: `test_guac.py` (framing), `test_rdp.py` (a fake guacd on a socket
   checks handshake order, the dropped `connect`, error wording, sharing),
   `test_rdp_live.py` (real guacd + xrdp, skipped without them),
-  `tests/smoke/rdp_smoke.py` (27 checks; see the smoke README),
+  `tests/smoke/rdp_smoke.py` (32 checks with `IX_DRIVE_DIR`; see the smoke
+  README), `test_rdp_drive.py`,
   `test_rdp_gateway_live.py` (real guacd, a TLS stand-in for the gateway). xrdp is not
   Windows: NLA and real Windows certificates are checked by hand.
 

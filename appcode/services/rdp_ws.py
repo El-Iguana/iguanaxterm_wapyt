@@ -33,7 +33,7 @@ from urllib.parse import parse_qs
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from services import guac, guacd, live, rdp_cert
+from services import drive, guac, guacd, live, rdp_cert
 from services import ssh as ssh_helpers
 from services.access import host_key_message, pin_gateway_key, pin_host_key, resolve_site
 from services.auth import current_user_id
@@ -91,6 +91,10 @@ def rdp_options(profile: dict) -> dict:
         "gateway_same_login": bool(stored.get("gateway_same_login", True)),
         "gateway_username": str(stored.get("gateway_username") or ""),
         "desktop_thumbprint": str(stored.get("desktop_thumbprint") or ""),
+        # The shared drive (#76): off unless asked for; both ways by default.
+        "drive": bool(stored.get("drive", False)),
+        "drive_upload": bool(stored.get("drive_upload", True)),
+        "drive_download": bool(stored.get("drive_download", True)),
     }
 
 
@@ -124,6 +128,10 @@ def guacd_params(profile: dict, hostname: str, port: int) -> dict:
         # Performance (#74): colour depth and the effects that cost bandwidth.
         "color-depth": look["color_depth"],
         **{param: "true" if look[key] else "" for key, param, _label in RDP_EFFECTS},
+        # Guacamole's own file channel stays shut: files move only through
+        # IguanaXterm's Files, where the caps and one-way switches live (#76).
+        "disable-download": "true",
+        "disable-upload": "true",
     }
     if options["gateway_host"]:
         # The gateway's login is the desktop's unless the site says otherwise.
@@ -313,7 +321,28 @@ def _check_gateway(profile: dict) -> str:
     return seen
 
 
-def _prepare_gateway(profile: dict, width: int, height: int, dpi: int):
+def _drive_params(profile: dict, user_id: Optional[int]) -> dict:
+    """
+    The shared drive (#76), in the connecting person's own folder. Made here,
+    by IguanaXterm, so it has IguanaXterm's owner and mode; guacd only uses it.
+    """
+    if not (user_id and rdp_options(profile)["drive"] and drive.enabled()):
+        return {}
+    try:
+        drive.folder(user_id, profile["id"], create=True)
+    except (OSError, ValueError) as exc:
+        logger.warning("rdp: no drive for site %s: %s", profile.get("id"), exc)
+        return {}
+    return {
+        "enable-drive": "true",
+        "drive-name": drive.DRIVE_NAME,
+        "drive-path": drive.guacd_folder(user_id, profile["id"]),
+        "create-drive-path": "",
+    }
+
+
+def _prepare_gateway(profile: dict, width: int, height: int, dpi: int,
+                     user_id: Optional[int] = None):
     """
     A desktop behind a Remote Desktop Gateway (#75). guacd reaches it through
     the gateway, so IguanaXterm can't read the desktop's certificate itself:
@@ -337,6 +366,7 @@ def _prepare_gateway(profile: dict, width: int, height: int, dpi: int):
         prints.append(options["desktop_thumbprint"])
     params["cert-fingerprints"] = ",".join(prints)
     params["ignore-cert"] = "false" if options["desktop_thumbprint"] else "true"
+    params.update(_drive_params(profile, user_id))
     audio = AUDIO_TYPES if options["audio"] else ()
     sock, _connection_id, splitter, trailing = guacd.handshake(
         params, width, height, dpi, audio=audio
@@ -347,14 +377,15 @@ def _prepare_gateway(profile: dict, width: int, height: int, dpi: int):
 # ── The route ────────────────────────────────────────────────────────────────
 
 
-def _prepare(profile: dict, width: int, height: int, dpi: int):
+def _prepare(profile: dict, width: int, height: int, dpi: int,
+             user_id: Optional[int] = None):
     """
     Everything before the browser is involved: the tunnel, the certificate,
     and the guacd handshake. Runs on a worker thread (it blocks).
     Returns (socket, splitter, trailing instructions, tunnel or None).
     """
     if rdp_options(profile)["gateway_host"]:
-        return _prepare_gateway(profile, width, height, dpi)
+        return _prepare_gateway(profile, width, height, dpi, user_id)
     host = profile.get("host") or ""
     port = int(profile.get("port") or 3389)
     tunnel = None
@@ -394,6 +425,7 @@ def _prepare(profile: dict, width: int, height: int, dpi: int):
             dial_host, dial_port = host, port
 
         params = guacd_params(profile, dial_host, dial_port)
+        params.update(_drive_params(profile, user_id))
         if pin:
             params["cert-fingerprints"] = rdp_cert.guacd_fingerprint(pin)
             params["ignore-cert"] = "false"
@@ -484,7 +516,7 @@ async def desktop(websocket: WebSocket, session_id: int) -> None:
     loop = asyncio.get_running_loop()
     try:
         sock, splitter, trailing, tunnel = await loop.run_in_executor(
-            None, _prepare, profile, width, height, dpi
+            None, _prepare, profile, width, height, dpi, user_id
         )
     except ssh_helpers.HostKeyChanged as exc:
         await _refuse(websocket, host_key_message(exc, access), _FORBIDDEN)

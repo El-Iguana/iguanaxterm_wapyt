@@ -250,6 +250,11 @@ def _dial(session: dict, session_id: int, user_id: int):
     """
     if session.get("type") == "ftp":
         return ftp_helpers.connect(session, on_learn_host_key=pin_host_key(session_id))
+    if session.get("type") == "rdp":
+        # The site's shared drive, in this person's folder (#76).
+        from services import drive
+
+        return drive.connect(session, user_id)
     if session.get("type") in ("telnet", "vnc"):
         raise PermissionError("This connection has no file browser")
     return ssh_helpers.connect(session, on_learn_host_key=pin_host_key(session_id))

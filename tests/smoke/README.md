@@ -84,14 +84,21 @@ RDP sound (#73).
 
 ```bash
 podman build -t iguanaxterm-rdptest -f tests/smoke/Containerfile.rdptarget tests/smoke
-podman run -d --name ix-rdptest -p 127.0.0.1:3389:3389 -p 127.0.0.1:2224:22 iguanaxterm-rdptest
-# guacd on the host network, loopback only (4823 keeps clear of a dev container's 4822)
-podman run -d --name ix-guacd-test --network host --entrypoint /opt/guacamole/sbin/guacd \
+# FUSE for the shared drive (#76): xrdp mounts it at ~/thinclient_drives/GUACFS
+podman run -d --name ix-rdptest --device /dev/fuse --cap-add SYS_ADMIN \
+  -p 127.0.0.1:3389:3389 -p 127.0.0.1:2224:22 iguanaxterm-rdptest
+# guacd on the host network, loopback only (4823 keeps clear of a dev
+# container's 4822). --user 0:0 is you in rootless podman, so the drive
+# folder it shares with the app below is yours on both sides.
+mkdir -p /tmp/ixdrives
+podman run -d --name ix-guacd-test --network host --user 0:0 \
+  -v /tmp/ixdrives:/tmp/ixdrives:z --entrypoint /opt/guacamole/sbin/guacd \
   docker.io/guacamole/guacd:1.6.0 -f -b 127.0.0.1 -l 4823
-# the app, with a fresh data dir, told where guacd is
-GANXTERM_GUACD=127.0.0.1:4823 GANXTERM_DATA_DIR=/tmp/ixrdp GANXTERM_ADMIN_PASS=testpass123 \
+# the app, with a FRESH data dir, told where guacd and the drives are
+GANXTERM_GUACD=127.0.0.1:4823 GANXTERM_DRIVE_DIR=/tmp/ixdrives \
+  GANXTERM_DATA_DIR=/tmp/ixrdp GANXTERM_ADMIN_PASS=testpass123 \
   PORT=8799 uv run python service.py &
-IX_DATA_DIR=/tmp/ixrdp python3 tests/smoke/rdp_smoke.py
+IX_DRIVE_DIR=/tmp/ixdrives IX_DATA_DIR=/tmp/ixrdp python3 tests/smoke/rdp_smoke.py
 ```
 
 It checks: the desktop draws (real pixels off guacamole's canvases), the
@@ -100,8 +107,10 @@ files, via `podman exec`), the remote screen follows a resize, the clipboard
 works both ways, sound reaches the pane and Mute drops it (and is remembered
 per site), the Custom performance fields show and hide, Slow link and Best
 quality sites connect, "Use every pixel" doubles the desktop's pixels on a
-2x screen (a second browser context with `device_scale_factor=2`), NLA
-against xrdp is explained as a refused login, the
+2x screen (a second browser context with `device_scale_factor=2`), a file
+uploaded in a drive site's Files tab is on the desktop's drive and one the
+desktop writes is listed and downloads (with `IX_DRIVE_DIR`), NLA against xrdp
+is explained as a refused login, the
 tunnel-only port connects through SSH and is pinned too, and a rotated
 certificate is refused until **Forget host key**. `IX_RDP_HOST`,
 `IX_RDP_SSH_HOST` and `IX_RDP_CONTAINER` point it at a target on a
@@ -117,7 +126,10 @@ guacd and checks that it reaches the gateway's HTTP request only when the
 gateway's certificate is in `cert-fingerprints`. The smoke test covers the
 gateway fields in the editor.
 
-Traps: an `xclip` started in the background dies with `podman exec`, and then
+Traps: start from a fresh data dir and a fresh target (`podman rm -f` and
+`run`, not `podman restart`, after which the clipboard checks failed). The
+smoke hides `showOpenFilePicker` so uploads take the `<input>` path Playwright
+can drive. An `xclip` started in the background dies with `podman exec`, and then
 there is nothing for xrdp to copy, so the test keeps `xclip -quiet` running in
 the foreground. A Ctrl+V into the terminal leaves bash in quoted-insert, so the
 next run presses Enter twice before typing.

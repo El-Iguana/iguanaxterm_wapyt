@@ -762,7 +762,11 @@ class IguanaXterm(MainWindow):
         file browser when a site list withholds it (#39).
         """
         caps = dict(session_caps(session.get("type")))
-        caps["files"] = bool(caps["files"] and session.get("files", True))
+        if session.get("type") == "rdp":
+            # An RDP site's Files is its shared drive (#76); the server says.
+            caps["files"] = bool(session.get("files"))
+        else:
+            caps["files"] = bool(caps["files"] and session.get("files", True))
         return caps
 
     @staticmethod
@@ -1363,8 +1367,8 @@ class IguanaXterm(MainWindow):
         # lives there) but not a button that could switch to it. A desktop pane
         # uses that same panel for its screen, and has no Files at all.
         term_attrs = "" if caps["terminal"] or caps["desktop"] else " hidden"
-        if caps["desktop"]:
-            files_attrs = " hidden"
+        if caps["desktop"] and not caps["files"]:
+            files_attrs = " hidden"        # an RDP drive (#76) is the exception
         term_icon, term_label = (
             ("mdi-monitor", "Desktop") if caps["desktop"] else ("mdi-console-line", "Terminal")
         )
@@ -3023,6 +3027,16 @@ class IguanaXterm(MainWindow):
                                 if existing.get("has_gateway_password") else None,
                                 placeholder="••••••" if existing.get("has_gateway_password")
                                 else ""),
+                    # The shared drive (#76), where the server has drives.
+                    FieldConfig(id="drive", label="Shared drive in Windows", type="checkbox",
+                                value=bool(rdp.get("drive", False)), span=2,
+                                help="Windows sees an \u201cIguanaXterm\u201d drive; the pane's "
+                                     "Files tab shows the same folder here. Each person gets "
+                                     "their own."),
+                    FieldConfig(id="drive_upload", label="Files can go to Windows",
+                                type="checkbox", value=bool(rdp.get("drive_upload", True))),
+                    FieldConfig(id="drive_download", label="Files can come from Windows",
+                                type="checkbox", value=bool(rdp.get("drive_download", True))),
                     FieldConfig(id="desktop_thumbprint", label="Desktop certificate thumbprint",
                                 value=rdp.get("desktop_thumbprint", ""), span=2,
                                 placeholder="Optional",
@@ -3043,6 +3057,9 @@ class IguanaXterm(MainWindow):
                 return
             if payload.get("id") == "gateway_same_login":
                 _apply_gateway("rdp", payload.get("value"))
+                return
+            if payload.get("id") == "drive":
+                _apply_drive("rdp", payload.get("value"))
                 return
             if payload.get("id") != "session_type":
                 return
@@ -3068,6 +3085,17 @@ class IguanaXterm(MainWindow):
             current = form.get_values()
             _apply_performance(session_type, current.get("performance"))
             _apply_gateway(session_type, current.get("gateway_same_login"))
+            _apply_drive(session_type, current.get("drive"))
+
+        def _apply_drive(session_type: str, on) -> None:
+            """The drive's switches only when it's on, and only if drives exist (#76)."""
+            offered = session_type == "rdp" and bool(self._features.get("rdp_drive"))
+            for field, show in (("drive", offered), ("drive_upload", offered and on),
+                                ("drive_download", offered and on)):
+                if show:
+                    form.show_field(field)
+                else:
+                    form.hide_field(field)
 
         def _apply_gateway(session_type: str, same_login) -> None:
             """The gateway's own login only when it differs (#75)."""
@@ -3127,6 +3155,9 @@ class IguanaXterm(MainWindow):
                         "gateway_username": values.get("gateway_username") or "",
                         "gateway_domain": values.get("gateway_domain") or "",
                         "desktop_thumbprint": values.get("desktop_thumbprint") or "",
+                        "drive": bool(values.get("drive")),
+                        "drive_upload": bool(values.get("drive_upload")),
+                        "drive_download": bool(values.get("drive_download")),
                     }
                     # Three-state like the site password: blank keeps it.
                     if values.get("gateway_password"):

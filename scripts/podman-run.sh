@@ -29,6 +29,8 @@ NAME=iguanaxterm
 IMAGE=localhost/iguanaxterm
 PORT="${PORT:-8765}"
 VOLUME=ganxterm_data
+# RDP shared drives (#76), shared by the app and guacd.
+DRIVES=ganxterm_drives
 # guacd, for RDP desktops: on the host network too, so bound to 127.0.0.1
 # explicitly. The image's default (0.0.0.0) would put an unauthenticated proxy
 # on the LAN. Same image and pin as compose.yaml.
@@ -62,10 +64,17 @@ mkdir -p "$DOWNLOADS"
 
 echo "==> restarting $GUACD_NAME (127.0.0.1:$GUACD_PORT)"
 podman rm -f "$GUACD_NAME" >/dev/null 2>&1 || true
+# guacd runs as the app's own user, mapped to you like the app (keep-id), so
+# both can change what the other wrote on the shared drives (#76).
+podman volume exists "$DRIVES" || podman volume create "$DRIVES" >/dev/null
 podman run -d \
   --name "$GUACD_NAME" \
   --restart unless-stopped \
   --label app=IguanaXterm \
+  --userns=keep-id:uid=10001,gid=999 \
+  --user 10001:999 \
+  -e HOME=/tmp \
+  -v "$DRIVES:/drives:U" \
   --network host \
   --entrypoint /opt/guacamole/sbin/guacd \
   "$GUACD_IMAGE" -f -b 127.0.0.1 -l "$GUACD_PORT" -L info >/dev/null
@@ -86,8 +95,10 @@ podman run -d \
   -e "GANXTERM_CANONICAL_ORIGIN=http://127.0.0.1:$PORT" \
   -e GANXTERM_DOWNLOAD_DIR=/downloads \
   -e "GANXTERM_GUACD=127.0.0.1:$GUACD_PORT" \
+  -e GANXTERM_DRIVE_DIR=/drives \
   -e "GANXTERM_DOWNLOAD_HOST_DIR=${DOWNLOADS/#$HOME/\~}" \
   -v "$VOLUME:/data:U" \
+  -v "$DRIVES:/drives:U" \
   -v "$DOWNLOADS:/downloads:z" \
   "$IMAGE:latest" >/dev/null
 

@@ -39,10 +39,9 @@ services:
       # (INSTALL.md, "Reaching IguanaXterm from other machines").
       GANXTERM_CANONICAL_ORIGIN: ${GANXTERM_CANONICAL_ORIGIN:-http://127.0.0.1:${GANXTERM_PORT:-8765}}
       GANXTERM_ALLOWED_HOSTS: ${GANXTERM_ALLOWED_HOSTS:-}
+      GANXTERM_DRIVE_DIR: /drives
       # RDP desktops, through the guacd service below. Unset it to switch RDP off.
       GANXTERM_GUACD: ${GANXTERM_GUACD:-guacd:4822}
-    depends_on:
-      - guacd
     ports:
       # 127.0.0.1 on purpose: pytincture only serves authenticated plain HTTP
       # to a loopback address, and this holds your SSH credentials.
@@ -53,6 +52,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - iguanaxterm-data:/data
+      - iguanaxterm-drives:/drives
     healthcheck:
       test: ["CMD", "python", "manage.py", "health"]
       interval: 30s
@@ -69,6 +69,18 @@ services:
     labels:
       app: IguanaXterm
     restart: unless-stopped
+    # RDP shared drives (#76): guacd writes them as the app's own uid, so
+    # either side can change what the other wrote. HOME: FreeRDP wants a
+    # writable one, and / isn't for this uid.
+    user: "10001:999"
+    environment:
+      HOME: /tmp
+    volumes:
+      - iguanaxterm-drives:/drives
+    # After the app, so the shared volume is created from the app image's
+    # /drives, owned by uid 10001, not root.
+    depends_on:
+      - iguanaxterm
     # No ports: on purpose (see the top of this file). IguanaXterm's
     # healthcheck stays on the app alone: guacd down disables RDP, nothing else.
 
@@ -76,3 +88,6 @@ volumes:
   iguanaxterm-data:
     # Named explicitly so it is the same whatever folder this was cloned into.
     name: iguanaxterm-data
+  iguanaxterm-drives:
+    # RDP shared drives (#76), shared by the app and guacd.
+    name: iguanaxterm-drives

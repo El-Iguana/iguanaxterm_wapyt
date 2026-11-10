@@ -126,11 +126,11 @@ def test_rdp_is_off_without_guacd(world, monkeypatch):
     _db, ids = world
     monkeypatch.delenv("GANXTERM_GUACD", raising=False)
     pam = svc(SessionService, ids["pam"], "power")
-    assert pam.features() == {"rdp": False}
+    assert pam.features() == {"rdp": False, "rdp_drive": False}
     result = pam.save(name="w", host="h", port=3389, session_type="rdp")
     assert not result["ok"] and "guacd" in result["errors"]["session_type"]
     monkeypatch.setenv("GANXTERM_GUACD", "guacd:4822")
-    assert pam.features() == {"rdp": True}
+    assert pam.features()["rdp"] is True
 
 
 def test_options_round_trip_and_no_secrets(rdp_site):
@@ -146,7 +146,8 @@ def test_options_round_trip_and_no_secrets(rdp_site):
                               "window_drag": False, "composition": False, "animations": False,
                               "hidpi": False, "gateway_host": "", "gateway_port": 443,
                               "gateway_domain": "", "gateway_same_login": True,
-                              "gateway_username": "", "desktop_thumbprint": ""}
+                              "gateway_username": "", "desktop_thumbprint": "",
+                              "drive": False, "drive_upload": True, "drive_download": True}
     listed = next(row for row in pam.list() if row["id"] == site)
     assert listed["options"] == got["options"]
     assert "rdp-secret-pw" not in json.dumps([got, pam.list()])

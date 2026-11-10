@@ -426,6 +426,10 @@ class IguanaXterm(MainWindow):
                     pane["rfb"].sendWindowsKey()
                     pane["rfb"].focus()
                 return
+            mute = event.target.closest("[data-pane-mute]")
+            if mute:
+                self._toggle_mute(mute.dataset.paneMute)
+                return
             full = event.target.closest("[data-pane-fullscreen]")
             if full:
                 pane = self._panes.get(full.dataset.paneFullscreen)
@@ -712,6 +716,40 @@ class IguanaXterm(MainWindow):
 
     def _session(self, session_id: int | None) -> dict | None:
         return next((s for s in self._sessions if s["id"] == session_id), None)
+
+    # RDP sound (#73): muted or not is a per-site choice kept in this browser
+    # only. Storage can be missing or refuse (private windows), so it's
+    # best-effort: sound on.
+    @staticmethod
+    def _muted(session_id: int) -> bool:
+        try:
+            return js.window.localStorage.getItem(f"ix-rdp-muted-{session_id}") == "1"
+        except Exception:
+            return False
+
+    @staticmethod
+    def _remember_muted(session_id: int, muted: bool) -> None:
+        try:
+            key = f"ix-rdp-muted-{session_id}"
+            if muted:
+                js.window.localStorage.setItem(key, "1")
+            else:
+                js.window.localStorage.removeItem(key)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _mute_button(pane_id: str, muted: bool) -> str:
+        icon, label, title = (
+            ("mdi-volume-off", "Muted", "Sound is off. Click to hear the remote desktop")
+            if muted else
+            ("mdi-volume-high", "Sound", "Mute the remote desktop")
+        )
+        return (
+            f'    <button type="button" class="ix-pane-cad" data-pane-mute="{pane_id}"'
+            f'            aria-pressed="{"true" if muted else "false"}" title="{title}">'
+            f'      <span class="mdi {icon}"></span><span>{label}</span></button>'
+        )
 
     @staticmethod
     def _caps(session: dict) -> dict:
@@ -1087,7 +1125,10 @@ class IguanaXterm(MainWindow):
             # screen element, so the Ctrl+V trick listens one level up.
             host.innerHTML = '<div class="ix-rdp" tabindex="0"></div>'
             screen = host.querySelector(".ix-rdp")
-            rfb = js.window.IxRDP.new(screen, f"{scheme}://{js.location.host}/ws/rdp/{pane['session_id']}")
+            rfb = js.window.IxRDP.new(
+                screen, f"{scheme}://{js.location.host}/ws/rdp/{pane['session_id']}",
+                self._muted(pane["session_id"]),
+            )
             key_target = host
         else:
             host.innerHTML = '<div class="ix-vnc" tabindex="-1"></div>'
@@ -1174,6 +1215,26 @@ class IguanaXterm(MainWindow):
         key_target.addEventListener("keydown", key_proxy, True)
         if is_rdp:
             rfb.focus()
+
+    def _toggle_mute(self, pane_id: str) -> None:
+        """The pane's Sound / Muted button (#73)."""
+        pane = self._panes.get(pane_id)
+        if pane is None:
+            return
+        site = pane["session_id"]
+        muted = not self._muted(site)
+        self._remember_muted(site, muted)
+        # It's per site, so every pane open on this site follows.
+        for other_id, other in self._panes.items():
+            if other.get("session_id") != site:
+                continue
+            if other.get("rfb") is not None and other.get("is_rdp"):
+                other["rfb"].setMuted(muted)
+            button = js.document.querySelector(f'[data-pane-mute="{other_id}"]')
+            if button:
+                button.outerHTML = self._mute_button(other_id, muted).strip()
+        if pane.get("rfb") is not None:
+            pane["rfb"].focus()
 
     async def _clipboard_to_desktop(self, pane_id: str, then_paste: bool = False) -> None:
         """
@@ -1326,6 +1387,9 @@ class IguanaXterm(MainWindow):
                 f'            title="Fill the screen with this desktop (Esc leaves)">'
                 f'      <span class="mdi mdi-fullscreen"></span><span>Fullscreen</span></button>'
             )
+            if (session.get("options") or {}).get("audio", True):
+                # Sound (#73), muted per site in this browser only.
+                cad += self._mute_button(pane_id, self._muted(session["id"]))
         return (
             f'<div class="ix-pane" data-pane="{pane_id}">'
             f'  <div class="ix-pane-tabs">'
@@ -2909,6 +2973,10 @@ class IguanaXterm(MainWindow):
                                 help="The layout the Windows session uses."),
                     FieldConfig(id="console", label="Admin console session", type="checkbox",
                                 value=bool(rdp.get("console")), span=2),
+                    FieldConfig(id="audio", label="Play the desktop's sound", type="checkbox",
+                                value=bool(rdp.get("audio", True)), span=2,
+                                help="Off saves bandwidth on slow links. Each pane "
+                                     "also has a Mute button."),
                     FieldConfig(id="description", label="Description",
                                 value=existing.get("description", ""), span=2),
                 ],
@@ -2968,6 +3036,7 @@ class IguanaXterm(MainWindow):
                         "resize": values.get("resize") or "display-update",
                         "keyboard": values.get("keyboard") or "en-us-qwerty",
                         "console": bool(values.get("console")),
+                        "audio": bool(values.get("audio")),
                     }
                 # An empty secret field means "unchanged" when one is stored,
                 # and the service's sentinel default expresses that by omission.
@@ -3793,7 +3862,7 @@ _SFTP_CSS = """
 """
 
 # The session editor's RDP-only fields (#56), shown for RDP sites alone.
-_RDP_FIELDS = ("domain", "security", "resize", "keyboard", "console")
+_RDP_FIELDS = ("domain", "security", "resize", "keyboard", "console", "audio")
 
 # services/live.py REVOKED, which the relay sends when access is taken away.
 _ACCESS_REMOVED = "Access to this site was removed."

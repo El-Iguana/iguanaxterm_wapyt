@@ -138,7 +138,7 @@ def test_options_round_trip_and_no_secrets(rdp_site):
     pam = svc(SessionService, ids["pam"], "power")
     got = pam.get(site)
     assert got["options"] == {"domain": "", "security": "rdp", "resize": "display-update",
-                              "keyboard": "de-de-qwertz", "console": True}
+                              "keyboard": "de-de-qwertz", "console": True, "audio": True}
     listed = next(row for row in pam.list() if row["id"] == site)
     assert listed["options"] == got["options"]
     assert "rdp-secret-pw" not in json.dumps([got, pam.list()])
@@ -202,6 +202,29 @@ def test_split_login_and_params():
     assert params["username"] == "pam" and params["domain"] == "CORP"
     assert params["security"] == "nla" and params["resize-method"] == ""
     assert params["console"] == "true" and params["server-layout"] == "en-us-qwerty"
+
+
+def test_audio_setting(world, monkeypatch):
+    """#73: sound is on unless the site turns it off, including old sites."""
+    from services.rdp_ws import guacd_params, rdp_options
+    from services.session_service import SessionService
+
+    # A site saved before #73 has no "audio" key.
+    old = {"username": "u", "options": json.dumps({"security": "nla"})}
+    assert rdp_options(old)["audio"] is True
+    assert guacd_params(old, "h", 3389)["disable-audio"] == ""
+    off = {"username": "u", "options": json.dumps({"audio": False})}
+    assert rdp_options(off)["audio"] is False
+    assert guacd_params(off, "h", 3389)["disable-audio"] == "true"
+
+    _db, ids = world
+    monkeypatch.setenv("GANXTERM_GUACD", "guacd:4822")
+    pam = svc(SessionService, ids["pam"], "power")
+    quiet = pam.save(name="q", host="h", port=3389, session_type="rdp",
+                     options={"audio": False})["id"]
+    assert pam.get(quiet)["options"]["audio"] is False
+    loud = pam.save(name="l", host="h", port=3389, session_type="rdp", options={})["id"]
+    assert pam.get(loud)["options"]["audio"] is True
 
 
 # --------------------------------------------------------------------------
@@ -328,6 +351,8 @@ def test_handshake_order_login_kept_server_side_and_no_renegotiation(rdp_site, m
     assert fake.opcodes()[:7] == ["select", "size", "audio", "video", "image", "timezone", "connect"]
     assert fake.received[0] == ["select", "rdp"]
     assert fake.received[1] == ["size", "1280", "720", "120"]
+    # #73: sound on by default, offered as raw PCM the pane can play.
+    assert fake.received[2] == ["audio", "audio/L16", "audio/L8"]
     connect = dict(zip(ARGS[1:], fake.connect()[1:]))
     assert connect["hostname"] == "10.0.0.5" and connect["port"] == "3389"
     assert connect["username"] == "pam" and connect["domain"] == "CORP"

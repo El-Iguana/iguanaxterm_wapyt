@@ -56,6 +56,10 @@ _FORBIDDEN = "771"
 RDP_SECURITY = ("any", "nla", "tls", "rdp")
 RDP_RESIZE = ("display-update", "reconnect", "none")
 
+# What the pane can play (#73): raw PCM, which guacamole-common-js's
+# RawAudioPlayer handles in every browser with Web Audio. guacd picks one.
+AUDIO_TYPES = ("audio/L16", "audio/L8")
+
 
 def rdp_options(profile: dict) -> dict:
     """The site's RDP settings, with defaults for anything unset."""
@@ -71,6 +75,8 @@ def rdp_options(profile: dict) -> dict:
         "resize": stored.get("resize") if stored.get("resize") in RDP_RESIZE else "display-update",
         "keyboard": str(stored.get("keyboard") or "en-us-qwerty"),
         "console": bool(stored.get("console")),
+        # Sites saved before #73 have no "audio" key: they get sound.
+        "audio": bool(stored.get("audio", True)),
     }
 
 
@@ -99,7 +105,7 @@ def guacd_params(profile: dict, hostname: str, port: int) -> dict:
         "resize-method": "" if options["resize"] == "none" else options["resize"],
         "server-layout": options["keyboard"],
         "console": "true" if options["console"] else "",
-        "disable-audio": "true",
+        "disable-audio": "" if options["audio"] else "true",
         "enable-font-smoothing": "true",
     }
 
@@ -304,7 +310,10 @@ def _prepare(profile: dict, width: int, height: int, dpi: int):
         elif rdp_options(profile)["security"] != "rdp":
             # The server chose plain RDP security: nothing to verify.
             params["ignore-cert"] = "true"
-        sock, _connection_id, splitter, trailing = guacd.handshake(params, width, height, dpi)
+        audio = AUDIO_TYPES if rdp_options(profile)["audio"] else ()
+        sock, _connection_id, splitter, trailing = guacd.handshake(
+            params, width, height, dpi, audio=audio
+        )
         return sock, splitter, trailing, tunnel
     except BaseException:
         if tunnel is not None:

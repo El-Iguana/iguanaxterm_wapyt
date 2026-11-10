@@ -11,18 +11,21 @@
 # set and read the remote clipboard directly.
 #
 # Ctrl+Alt+Del is bound to `touch /tmp/cad-pressed`, so a test can tell the
-# keys reached the session. xrdp has no NLA (CredSSP), so security=nla is
-# refused: that is the "login refused" case.
+# keys reached the session. PipeWire with xrdp's module sends the session's
+# sound over RDP (#73); bookworm has no such module, hence trixie. Play into
+# it with `/play-noise.sh` (pacat). xrdp has no NLA
+# (CredSSP), so security=nla is refused: that is the "login refused" case.
 #
 # /rotate-cert.sh replaces xrdp's certificate and restarts it, for the
 # "certificate changed" test.
-FROM docker.io/library/debian:bookworm-slim
+FROM docker.io/library/debian:trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         xrdp xorgxrdp xfce4 xfce4-terminal dbus-x11 xclip socat openssh-server \
         openssl ssl-cert procps fonts-dejavu-core \
+        pipewire pipewire-pulse wireplumber pipewire-module-xrdp pulseaudio-utils \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
     && useradd -m -s /bin/bash testuser \
     && echo 'testuser:testpass' | chpasswd \
@@ -31,7 +34,13 @@ RUN apt-get update \
     && sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config \
     && sed -i 's/^#*AllowTcpForwarding.*/AllowTcpForwarding yes/' /etc/ssh/sshd_config \
     && sed -i 's/^security_layer=.*/security_layer=tls/' /etc/xrdp/xrdp.ini \
-    && echo 'startxfce4' > /home/testuser/.xsession \
+    && printf '%s\n' \
+        '#!/bin/sh' \
+        'export XDG_RUNTIME_DIR=/tmp/xdg-testuser' \
+        'mkdir -p -m 700 "$XDG_RUNTIME_DIR"' \
+        'exec dbus-run-session sh -c "pipewire & sleep 0.5; wireplumber & pipewire-pulse & exec startxfce4"' \
+        > /home/testuser/.xsession \
+    && chmod +x /home/testuser/.xsession \
     && mkdir -p /home/testuser/.config/autostart \
         /home/testuser/.config/xfce4/xfconf/xfce-perchannel-xml \
     && printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Terminal' \
@@ -55,6 +64,12 @@ RUN apt-get update \
         'chmod 640 /etc/xrdp/key.pem && chgrp ssl-cert /etc/xrdp/key.pem' \
         'pkill -x xrdp; sleep 0.5; /usr/sbin/xrdp' > /rotate-cert.sh \
     && chmod +x /rotate-cert.sh \
+    && printf '%s\n' \
+        '#!/bin/sh' \
+        'XDG_RUNTIME_DIR=/tmp/xdg-testuser head -c "${1:-352800}" /dev/urandom \' \
+        '  | XDG_RUNTIME_DIR=/tmp/xdg-testuser pacat --raw --rate=44100 --channels=2 --format=s16le' \
+        > /play-noise.sh \
+    && chmod +x /play-noise.sh \
     && printf '%s\n' \
         '#!/bin/sh' \
         'set -e' \

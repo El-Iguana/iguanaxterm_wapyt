@@ -9,6 +9,7 @@ import json
 import socket
 import struct
 import threading
+import time
 
 import pytest
 from fastapi import FastAPI
@@ -47,7 +48,8 @@ ARGS = ["args", "VERSION_1_5_0", "hostname", "port", "domain", "username", "pass
 class FakeGuacd:
     """Accepts one connection and plays guacd's side of the handshake."""
 
-    def __init__(self, after_ready: str = "", error: tuple | None = None) -> None:
+    def __init__(self, after_ready: str = "", error: tuple | None = None,
+                 hang_up: bool = False) -> None:
         self.server = socket.socket()
         self.server.bind(("127.0.0.1", 0))
         self.server.listen(1)
@@ -55,6 +57,7 @@ class FakeGuacd:
         self.received: list[list[str]] = []
         self.after_ready = after_ready
         self.error = error
+        self.hang_up = hang_up          # close right after ready + after_ready
         self.conn = None
         threading.Thread(target=self._serve, daemon=True).start()
 
@@ -77,6 +80,10 @@ class FakeGuacd:
                             conn.close()
                             return
                         conn.sendall((guac.encode("ready", "$abc") + self.after_ready).encode())
+                        if self.hang_up:
+                            time.sleep(0.2)
+                            conn.close()
+                            return
         except OSError:
             pass
 
@@ -392,6 +399,82 @@ def test_guacd_errors_are_put_in_words(rdp_site, monkeypatch):
     elements = [e for _raw, e in guac.Splitter().feed(message)]
     error = next(e for e in elements if e[0] == "error")
     assert "login was refused" in error[1] and error[2] == "769"
+
+
+async def _frames_until_closed(ws) -> str:
+    """Every text frame the relay sends, until it closes the socket."""
+    from _asgi import Closed
+
+    frames = []
+    try:
+        while True:
+            frames.append(await ws.receive(raw=True, timeout=5))
+    except Closed:
+        return "".join(frames)
+
+
+def test_guacd_vanishing_mid_session_is_reported(rdp_site, monkeypatch):
+    # #87: guacd 1.6.0 can abort a session's process (GUAC_ASSERT). It closes
+    # the socket without "error" or "disconnect"; the page must hear why.
+    _db, ids, site = rdp_site
+    fake = FakeGuacd(after_ready=guac.encode("sync", "1"), hang_up=True)
+    monkeypatch.setenv("GANXTERM_GUACD", fake.address)
+
+    async def _go():
+        async with WebSocket(rdp_app(ids["pam"], "power"), f"/ws/rdp/{site}") as ws:
+            return await _frames_until_closed(ws)
+
+    try:
+        text = run(_go())
+    finally:
+        fake.close()
+    errors = [e for _raw, e in guac.Splitter().feed(text) if e[0] == "error"]
+    assert len(errors) == 1
+    assert "lost unexpectedly" in errors[0][1] and "Reconnect" in errors[0][1]
+
+
+def test_a_session_guacd_ends_itself_is_not_called_lost(rdp_site, monkeypatch):
+    # The remote logged out: guacd says "disconnect" before closing. No extra error.
+    _db, ids, site = rdp_site
+    fake = FakeGuacd(after_ready=guac.encode("disconnect"), hang_up=True)
+    monkeypatch.setenv("GANXTERM_GUACD", fake.address)
+
+    async def _go():
+        async with WebSocket(rdp_app(ids["pam"], "power"), f"/ws/rdp/{site}") as ws:
+            return await _frames_until_closed(ws)
+
+    try:
+        text = run(_go())
+    finally:
+        fake.close()
+    opcodes = [e[0] for _raw, e in guac.Splitter().feed(text)]
+    assert "disconnect" in opcodes and "error" not in opcodes
+
+
+def test_browser_pings_keep_a_nop_going_to_guacd(rdp_site, monkeypatch):
+    # #87: guacd's main process notices a dead session only when it has
+    # something to pass on, so an idle desktop sends it a "nop" now and then
+    # (at most every _GUACD_NOP_SECONDS), never the tunnel's own ping.
+    _db, ids, site = rdp_site
+    fake = FakeGuacd()
+    monkeypatch.setenv("GANXTERM_GUACD", fake.address)
+    ping = guac.encode("", "ping", "1")
+
+    async def _go():
+        async with WebSocket(rdp_app(ids["pam"], "power"), f"/ws/rdp/{site}") as ws:
+            await ws.receive(raw=True)                       # the tunnel uuid
+            for _ in range(3):                               # three pings in a burst
+                await ws.to_app.put({"type": "websocket.receive", "text": ping})
+                await ws.receive(raw=True)                   # each answered here
+            await asyncio.sleep(0.3)
+
+    try:
+        run(_go())
+    finally:
+        fake.close()
+    after = fake.received[7:]
+    assert after.count(["nop"]) == 1
+    assert not any(e[0] == "" for e in after)
 
 
 def test_unreachable_guacd_is_explained(rdp_site, monkeypatch):

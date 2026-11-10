@@ -147,7 +147,8 @@ def test_options_round_trip_and_no_secrets(rdp_site):
                               "hidpi": False, "gateway_host": "", "gateway_port": 443,
                               "gateway_domain": "", "gateway_same_login": True,
                               "gateway_username": "", "desktop_thumbprint": "",
-                              "drive": False, "drive_upload": True, "drive_download": True}
+                              "drive": False, "drive_upload": True, "drive_download": True,
+                              "printing": False}
     listed = next(row for row in pam.list() if row["id"] == site)
     assert listed["options"] == got["options"]
     assert "rdp-secret-pw" not in json.dumps([got, pam.list()])
@@ -768,3 +769,28 @@ def test_gateway_errors_point_at_the_gateway():
     assert "Gateway rdgw" in with_gateway_hint("The login was refused.", "769", "rdgw")
     assert with_gateway_hint("The login was refused.", "769", "") == "The login was refused."
     assert with_gateway_hint("The session ended.", "525", "rdgw") == "The session ended."
+
+
+# --------------------------------------------------------------------------
+# Print to PDF (#77)
+# --------------------------------------------------------------------------
+
+
+def test_printing_is_off_unless_the_site_asks(world, monkeypatch):
+    from services.rdp_ws import PRINTER_NAME, guacd_params, rdp_options
+    from services.session_service import SessionService
+
+    off = guacd_params({"username": "u", "options": "{}"}, "h", 3389)
+    assert off["enable-printing"] == "" and off["printer-name"] == ""
+    on = guacd_params({"username": "u", "options": json.dumps({"printing": True})}, "h", 3389)
+    assert on["enable-printing"] == "true" and on["printer-name"] == PRINTER_NAME == "IguanaXterm PDF"
+    # Printing doesn't open Guacamole's file channel for anything else.
+    assert on["disable-download"] == "true" and on["disable-upload"] == "true"
+
+    _db, ids = world
+    monkeypatch.setenv("GANXTERM_GUACD", "guacd:4822")
+    pam = svc(SessionService, ids["pam"], "power")
+    site = pam.save(name="p", host="h", port=3389, session_type="rdp",
+                    options={"printing": True})["id"]
+    assert pam.get(site)["options"]["printing"] is True
+    assert rdp_options({"options": json.dumps(pam.get(site)["options"])})["printing"] is True

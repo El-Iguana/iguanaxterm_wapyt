@@ -129,6 +129,7 @@ def clean_rdp_options(options: Any) -> tuple[dict, dict]:
         "drive": bool(given.get("drive", False)),
         "drive_upload": bool(given.get("drive_upload", True)),
         "drive_download": bool(given.get("drive_download", True)),
+        "printing": bool(given.get("printing", False)),   # print to PDF (#77)
     }, errors
 
 

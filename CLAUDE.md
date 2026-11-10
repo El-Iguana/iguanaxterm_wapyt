@@ -550,6 +550,21 @@ browser (guacamole-common-js) ⇄ /ws/rdp/<id> ⇄ rdp_ws.py ⇄ TCP ⇄ guacd �
   `~/thinclient_drives/GUACFS`** (FUSE; the target needs `fuse3` and runs with
   `--device /dev/fuse --cap-add SYS_ADMIN`); Windows shows the drive-name.
   Idle cleanup isn't built.
+- **Print to PDF (#77), untested against Windows:** site option `printing`
+  sets `enable-printing` and `printer-name` "IguanaXterm PDF". guacd 1.6's
+  `print-job.c` runs the job through Ghostscript (`gs` 10.05 is in the image)
+  and sends `file` (application/pdf, the job's title + .pdf), then blobs,
+  then `end`, **waiting for an ack after the `file` and after every blob**.
+  With no `onfile` handler guacamole-common-js refuses it ("File transfer
+  unsupported"). `IxRDP._receivePrint` acks "Ready" then "OK" per blob,
+  stops at 100 MiB with `CLIENT_TOO_LARGE` (0x030D), and downloads through
+  a blob URL under a cleaned name; the app toasts on `printed` /
+  `printfailed`. Any file stream that isn't a PDF, or from a site without
+  printing, is refused with 0x0303: the drive channel is shut, so nothing
+  else should send one. Not `Guacamole.BlobReader`: it acks every blob
+  itself, so it can't stop at a cap cleanly. xrdp can't redirect printers,
+  so the smoke feeds guacd's exact instructions to the pane through
+  `IxRDP.tunnel.oninstruction` and reads the acks off `tunnel.sendMessage`.
 - **No multi-monitor:** guacd 1.6's `args` has no monitor or span parameter,
   and display updates send one primary monitor.
 - **guacd reports some failures after `ready`** (NLA against xrdp: `error
@@ -590,7 +605,7 @@ browser (guacamole-common-js) ⇄ /ws/rdp/<id> ⇄ rdp_ws.py ⇄ TCP ⇄ guacd �
 - Tests: `test_guac.py` (framing), `test_rdp.py` (a fake guacd on a socket
   checks handshake order, the dropped `connect`, error wording, sharing),
   `test_rdp_live.py` (real guacd + xrdp, skipped without them),
-  `tests/smoke/rdp_smoke.py` (32 checks with `IX_DRIVE_DIR`; see the smoke
+  `tests/smoke/rdp_smoke.py` (38 checks with `IX_DRIVE_DIR`; see the smoke
   README), `test_rdp_drive.py`,
   `test_rdp_gateway_live.py` (real guacd, a TLS stand-in for the gateway). xrdp is not
   Windows: NLA and real Windows certificates are checked by hand.

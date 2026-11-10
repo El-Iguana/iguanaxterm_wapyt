@@ -1137,7 +1137,8 @@ class IguanaXterm(MainWindow):
             rfb = js.window.IxRDP.new(
                 screen, f"{scheme}://{js.location.host}/ws/rdp/{pane['session_id']}",
                 to_js({"muted": self._muted(pane["session_id"]),
-                       "hidpi": bool(rdp_options.get("hidpi", False))},
+                       "hidpi": bool(rdp_options.get("hidpi", False)),
+                       "printing": bool(rdp_options.get("printing", False))},
                       dict_converter=js.Object.fromEntries),
             )
             key_target = host
@@ -1199,11 +1200,22 @@ class IguanaXterm(MainWindow):
             current["clip_pending"] = text
             _spawn(self._clipboard_from_desktop(pane_id, automatic=True), "desktop clipboard")
 
+        def _on_printed(event) -> None:
+            # The pane already downloaded it (#77); say so.
+            name = str(getattr(event.detail, "filename", "") or "document.pdf")
+            self._toast(f"Printed {name}: it's in your downloads.", kind="success")
+
+        def _on_print_failed(event) -> None:
+            self._toast(str(getattr(event.detail, "reason", "") or "Printing failed."),
+                        kind="error")
+
         for name, handler in (
             ("connect", _on_connect),
             ("disconnect", _on_disconnect),
             ("securityfailure", _on_security_failure),
             ("clipboard", _on_remote_clipboard),
+            ("printed", _on_printed),
+            ("printfailed", _on_print_failed),
         ):
             proxy = create_proxy(handler)
             pane.setdefault("proxies", []).append(proxy)
@@ -3037,6 +3049,10 @@ class IguanaXterm(MainWindow):
                                 type="checkbox", value=bool(rdp.get("drive_upload", True))),
                     FieldConfig(id="drive_download", label="Files can come from Windows",
                                 type="checkbox", value=bool(rdp.get("drive_download", True))),
+                    FieldConfig(id="printing", label="Print to PDF", type="checkbox",
+                                value=bool(rdp.get("printing", False)), span=2,
+                                help="Windows gets an \u201cIguanaXterm PDF\u201d printer; "
+                                     "whatever you print there downloads here as a PDF."),
                     FieldConfig(id="desktop_thumbprint", label="Desktop certificate thumbprint",
                                 value=rdp.get("desktop_thumbprint", ""), span=2,
                                 placeholder="Optional",
@@ -3158,6 +3174,7 @@ class IguanaXterm(MainWindow):
                         "drive": bool(values.get("drive")),
                         "drive_upload": bool(values.get("drive_upload")),
                         "drive_download": bool(values.get("drive_download")),
+                        "printing": bool(values.get("printing")),
                     }
                     # Three-state like the site password: blank keeps it.
                     if values.get("gateway_password"):
@@ -3990,7 +4007,7 @@ _SFTP_CSS = """
 # The session editor's RDP-only fields (#56), shown for RDP sites alone.
 _RDP_FIELDS = ("domain", "security", "resize", "keyboard", "console", "audio",
                "performance", "hidpi", "gateway_host", "gateway_port", "gateway_same_login",
-               "desktop_thumbprint")
+               "desktop_thumbprint", "printing")
 # Shown only when the gateway's login differs from the desktop's (#75).
 _RDP_GATEWAY_LOGIN_FIELDS = ("gateway_username", "gateway_domain", "gateway_password")
 # Shown only when Performance is Custom (#74).

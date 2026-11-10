@@ -37,7 +37,7 @@ from services import guac, guacd, live, rdp_cert
 from services import ssh as ssh_helpers
 from services.access import host_key_message, pin_host_key, resolve_site
 from services.auth import current_user_id
-from services.paths import session_caps
+from services.paths import RDP_EFFECTS, RDP_PERFORMANCE, rdp_look, session_caps
 from services.terminal_ws import CLOSE_FORBIDDEN, CLOSE_NOT_FOUND, CLOSE_UNAUTHENTICATED, _same_origin
 
 logger = logging.getLogger("iguanaxterm.rdp")
@@ -55,6 +55,8 @@ _FORBIDDEN = "771"
 
 RDP_SECURITY = ("any", "nla", "tls", "rdp")
 RDP_RESIZE = ("display-update", "reconnect", "none")
+PERFORMANCE = tuple(key for key, _label in RDP_PERFORMANCE)
+EFFECT_KEYS = tuple(key for key, _param, _label in RDP_EFFECTS)
 
 # What the pane can play (#73): raw PCM, which guacamole-common-js's
 # RawAudioPlayer handles in every browser with Web Audio. guacd picks one.
@@ -77,6 +79,11 @@ def rdp_options(profile: dict) -> dict:
         "console": bool(stored.get("console")),
         # Sites saved before #73 have no "audio" key: they get sound.
         "audio": bool(stored.get("audio", True)),
+        "performance": stored.get("performance") if stored.get("performance") in PERFORMANCE
+        else "balanced",
+        # Every physical pixel on a high-DPI screen (#74), opt-in; the pane reads it.
+        "hidpi": bool(stored.get("hidpi", False)),
+        **{key: stored[key] for key in ("color_depth", *EFFECT_KEYS) if key in stored},
     }
 
 
@@ -95,6 +102,7 @@ def guacd_params(profile: dict, hostname: str, port: int) -> dict:
     """The connect parameters, minus the certificate ones."""
     options = rdp_options(profile)
     username, domain = split_login(profile.get("username") or "", options["domain"])
+    look = rdp_look(options)
     return {
         "hostname": hostname,
         "port": str(port),
@@ -106,7 +114,9 @@ def guacd_params(profile: dict, hostname: str, port: int) -> dict:
         "server-layout": options["keyboard"],
         "console": "true" if options["console"] else "",
         "disable-audio": "" if options["audio"] else "true",
-        "enable-font-smoothing": "true",
+        # Performance (#74): colour depth and the effects that cost bandwidth.
+        "color-depth": look["color_depth"],
+        **{param: "true" if look[key] else "" for key, param, _label in RDP_EFFECTS},
     }
 
 

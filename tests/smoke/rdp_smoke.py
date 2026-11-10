@@ -19,6 +19,10 @@ What it pins:
     Ctrl+V put this computer's text there
   - sound (#73): noise played in the session reaches the pane; Mute drops it,
     is remembered for the site, and unmuting plays again
+  - performance (#74): the editor shows colour depth and effects only for
+    Custom; Slow link and Best quality sites connect and draw; on a 2x screen
+    "Use every pixel" gets a desktop with twice the pixels, and off (the
+    default) a CSS-sized one
   - a refused login (NLA against xrdp) is explained
   - the tunnel: a site reachable only through the SSH target connects
   - a changed certificate is refused with the host-key message, and
@@ -83,7 +87,7 @@ def visible_form(page):
 
 
 def add_site(page, name, host, port, session_type="rdp", security=None, via=None,
-             username="testuser", password="testpass"):
+             username="testuser", password="testpass", performance=None, hidpi=None):
     page.click('.wapyt-toolbar-btn[data-id="new"]')
     page.wait_for_selector(".wapyt-modal-body:visible .wapyt-form-body", timeout=30000)
     form = visible_form(page)
@@ -99,6 +103,10 @@ def add_site(page, name, host, port, session_type="rdp", security=None, via=None
         form.locator('[name="security"]').select_option(security)
     if via:
         form.locator('[name="via_session_id"]').select_option(label=f"Through SSH session “{via}”")
+    if performance:
+        form.locator('[name="performance"]').select_option(performance)
+    if hidpi is not None:
+        form.locator('[name="hidpi"]').set_checked(hidpi)
     form.locator(".wapyt-form-button-primary").click()
     page.wait_for_selector(".wapyt-modal-body:visible .wapyt-form-body", state="hidden", timeout=30000)
     page.wait_for_timeout(600)
@@ -299,9 +307,57 @@ with sync_playwright() as p:
           "after Forget, it connects and pins the new certificate", pinned("win-box"))
     close_pane(page, pane)
 
+    # ── performance presets (#74) ────────────────────────────────────────────
+    page.click('.wapyt-toolbar-btn[data-id="new"]')
+    page.wait_for_selector(".wapyt-modal-body:visible .wapyt-form-body", timeout=30000)
+    form = visible_form(page)
+    form.locator('[name="session_type"]').select_option("rdp")
+    page.wait_for_timeout(300)
+    depth = form.locator('[name="color_depth"]')
+    hidden_before = not depth.is_visible()
+    form.locator('[name="performance"]').select_option("custom")
+    page.wait_for_timeout(300)
+    shown = depth.is_visible() and form.locator('[name="wallpaper"]').is_visible()
+    form.locator('[name="performance"]').select_option("slow")
+    page.wait_for_timeout(300)
+    check(hidden_before and shown and not depth.is_visible(),
+          "colour depth and effects show only for Custom")
+    form.locator("button", has_text="Cancel").click()
+    page.wait_for_timeout(500)
+
+    for preset in ("slow", "best"):
+        add_site(page, f"{preset}-box", RDP_HOST, RDP_PORT, performance=preset)
+        pane = open_desktop(page, f"{preset}-box")
+        lit = wait_drawn(page, pane)
+        check(lit > 20, f"a {preset} preset site connects and draws", f"{lit}")
+        close_pane(page, pane)
+
     real = [e for e in errors if "WebSocket" not in e]
     check(not real, "no console errors", "; ".join(real)[:400])
     page.screenshot(path=os.environ.get("IX_SHOT", "/tmp/rdp_smoke.png"))
+
+    # ── high DPI (#74), on a 2x screen ───────────────────────────────────────
+    hi = browser.new_context(viewport={"width": 1400, "height": 900}, device_scale_factor=2)
+    page = hi.new_page()
+    page.goto(APP, wait_until="domcontentloaded", timeout=30000)
+    page.fill('input[name="email"]', "admin")
+    page.fill('input[name="password"]', ADMIN_PASSWORD)
+    page.click('input[type="submit"]')
+    page.wait_for_selector(".wapyt-toolbar", timeout=180000)
+    reset_workspace(page)
+    add_site(page, "sharp-box", RDP_HOST, RDP_PORT, hidpi=True)
+    ratio = """p => {
+      const root = document.querySelector(`#pane-term-${p} .ix-rdp`);
+      return root.ixRdp.display.getWidth() / root.getBoundingClientRect().width;
+    }"""
+    for name, want in (("sharp-box", 2), ("win-box", 1)):
+        pane = open_desktop(page, name)
+        wait_drawn(page, pane)
+        got = page.evaluate(ratio, pane)
+        check(abs(got - want) < 0.1,
+              f"{'sharp' if want == 2 else 'soft'}: desktop pixels per CSS pixel on a 2x screen",
+              f"{got:.2f}, want {want}")
+        close_pane(page, pane)
     browser.close()
 
 print(f"\n{sum(results)}/{len(results)} passed")

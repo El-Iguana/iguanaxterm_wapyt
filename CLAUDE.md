@@ -486,6 +486,24 @@ browser (guacamole-common-js) ⇄ /ws/rdp/<id> ⇄ rdp_ws.py ⇄ TCP ⇄ guacd �
   streams / received / played for the smoke test. The xrdp target is on
   **trixie** for `pipewire-module-xrdp` (bookworm has no xrdp audio module);
   `/play-noise.sh` in it plays noise into the session.
+- **Performance (#74):** `paths.RDP_PRESETS` (Best / Balanced / Slow link)
+  set `color-depth` and the six `enable-*` effects; `rdp_look()` maps a
+  site's options to them, and **Custom** reads them from the site, falling
+  back to Balanced. Balanced = server's colour depth, themes + font
+  smoothing (before #74 themes were off). Sites with no `performance` key are
+  Balanced. Custom's values are stored whatever the preset, so switching
+  back keeps them.
+- **DPI, measured against guacd 1.6.0's source:** the handshake's DPI only
+  resizes the desktop (`settings.c`: width × chosen DPI ÷ client DPI, where
+  `guac_rdp_suggest_resolution` prefers 96 whenever the area stays ≥ 800×600)
+  and is **never passed to Windows** (`disp.c` sends `DesktopScaleFactor =
+  0`). So "crisp and normal size" on a 2x screen is impossible through
+  guacd. The pane always says 96 DPI and sends CSS pixels, or with the
+  site's opt-in **Use every pixel** (`hidpi`) CSS × devicePixelRatio (capped
+  at 3): crisp, half size. Before #74 it sent 96 × dpr DPI with CSS pixels,
+  which guacd turned into the same CSS-sized desktop.
+- **No multi-monitor:** guacd 1.6's `args` has no monitor or span parameter,
+  and display updates send one primary monitor.
 - **guacd reports some failures after `ready`** (NLA against xrdp: `error
   "Security negotiation failed…" 769`), so the pump rewrites every `error` into
   words (`guac.status_message`), not only the handshake's.
@@ -524,7 +542,7 @@ browser (guacamole-common-js) ⇄ /ws/rdp/<id> ⇄ rdp_ws.py ⇄ TCP ⇄ guacd �
 - Tests: `test_guac.py` (framing), `test_rdp.py` (a fake guacd on a socket
   checks handshake order, the dropped `connect`, error wording, sharing),
   `test_rdp_live.py` (real guacd + xrdp, skipped without them),
-  `tests/smoke/rdp_smoke.py` (20 checks; see the smoke README). xrdp is not
+  `tests/smoke/rdp_smoke.py` (25 checks; see the smoke README). xrdp is not
   Windows: NLA and real Windows certificates are checked by hand.
 
 ### Folder downloads without a folder picker are saved on the server

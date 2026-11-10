@@ -19,12 +19,28 @@
   const RESIZE_DEBOUNCE_MS = 120;   // same idea as the terminal's fit debounce
   const STATE_CONNECTED = 3;
   const STATE_DISCONNECTED = 5;
+  const MAX_DENSITY = 3;            // beyond this the pixels cost more than they show
+
+  // Pixels per CSS pixel to ask the desktop for (#74). Off (the default), the
+  // desktop is CSS-sized and the browser stretches it on a high-DPI screen:
+  // normal size, a little soft. On, a 2x screen gets twice the pixels: crisp,
+  // but Windows draws at half the size, because guacd 1.6 never passes a
+  // scale factor to Windows (its DPI only resizes the desktop). The handshake
+  // always says 96 DPI: anything higher and guacd scales the size back down
+  // (guac_rdp_suggest_resolution), undoing this.
+  function density(hidpi) {
+    if (!hidpi) return 1;
+    return Math.min(MAX_DENSITY, Math.max(1, window.devicePixelRatio || 1));
+  }
 
   class IxRDP extends EventTarget {
-    constructor(container, url, muted) {
+    // options: {muted, hidpi}
+    constructor(container, url, options) {
       super();
+      options = options || {};
       this.container = container;
-      this.muted = !!muted;
+      this.muted = !!options.muted;
+      this.hidpi = !!options.hidpi;
       this._closedByUs = false;
       this._reported = false;
       this._refusal = "";
@@ -141,11 +157,11 @@
       };
 
       const rect = container.getBoundingClientRect();
-      const width = Math.max(320, Math.round(rect.width || 1024));
-      const height = Math.max(240, Math.round(rect.height || 768));
-      const dpi = Math.round(96 * (window.devicePixelRatio || 1));
+      const scale = density(this.hidpi);
+      const width = Math.max(320, Math.round((rect.width || 1024) * scale));
+      const height = Math.max(240, Math.round((rect.height || 768) * scale));
       this._lastSize = [width, height];
-      client.connect(`w=${width}&h=${height}&dpi=${dpi}`);
+      client.connect(`w=${width}&h=${height}&dpi=96`);
     }
 
     _finish() {
@@ -175,9 +191,10 @@
     // The remote desktop follows the tile (resize-method display-update).
     _sendSize() {
       const box = this.container.getBoundingClientRect();
-      const width = Math.round(box.width);
-      const height = Math.round(box.height);
-      if (width < 100 || height < 100) return;          // hidden, or mid-drag
+      if (box.width < 100 || box.height < 100) return;  // hidden, or mid-drag
+      const scale = density(this.hidpi);
+      const width = Math.round(box.width * scale);
+      const height = Math.round(box.height * scale);
       if (this._lastSize[0] === width && this._lastSize[1] === height) return;
       this._lastSize = [width, height];
       this.client.sendSize(width, height);

@@ -138,7 +138,11 @@ def test_options_round_trip_and_no_secrets(rdp_site):
     pam = svc(SessionService, ids["pam"], "power")
     got = pam.get(site)
     assert got["options"] == {"domain": "", "security": "rdp", "resize": "display-update",
-                              "keyboard": "de-de-qwertz", "console": True, "audio": True}
+                              "keyboard": "de-de-qwertz", "console": True, "audio": True,
+                              "performance": "balanced", "color_depth": "",
+                              "wallpaper": False, "theming": True, "font_smoothing": True,
+                              "window_drag": False, "composition": False, "animations": False,
+                              "hidpi": False}
     listed = next(row for row in pam.list() if row["id"] == site)
     assert listed["options"] == got["options"]
     assert "rdp-secret-pw" not in json.dumps([got, pam.list()])
@@ -150,6 +154,8 @@ def test_options_round_trip_and_no_secrets(rdp_site):
     ({"keyboard": "klingon"}, "keyboard"),
     ({"domain": "CORP\\x"}, "domain"),
     ({"domain": "a b"}, "domain"),
+    ({"performance": "turbo"}, "performance"),
+    ({"color_depth": "12"}, "color_depth"),
 ])
 def test_options_are_validated(world, monkeypatch, bad, field):
     from services.session_service import SessionService
@@ -428,3 +434,62 @@ def test_guacd_status(monkeypatch):
     finally:
         fake.close()
     assert guacd.local_address_towards("127.0.0.1") == "127.0.0.1"
+
+
+# --------------------------------------------------------------------------
+# Performance presets and high DPI (#74)
+# --------------------------------------------------------------------------
+
+EFFECT_PARAMS = ("enable-wallpaper", "enable-theming", "enable-font-smoothing",
+                 "enable-full-window-drag", "enable-desktop-composition", "enable-menu-animations")
+
+
+def _look(options: dict) -> dict:
+    from services.rdp_ws import guacd_params
+
+    params = guacd_params({"username": "u", "options": json.dumps(options)}, "h", 3389)
+    return {name: params[name] for name in ("color-depth", *EFFECT_PARAMS)}
+
+
+def test_presets_map_to_guacd_parameters():
+    best = _look({"performance": "best"})
+    assert best["color-depth"] == "32" and all(best[p] == "true" for p in EFFECT_PARAMS)
+    slow = _look({"performance": "slow"})
+    assert slow["color-depth"] == "16" and not any(slow[p] for p in EFFECT_PARAMS)
+    balanced = _look({"performance": "balanced"})
+    assert balanced["color-depth"] == ""
+    assert [p for p in EFFECT_PARAMS if balanced[p]] == ["enable-theming", "enable-font-smoothing"]
+
+
+def test_a_site_from_before_74_is_balanced():
+    assert _look({"security": "nla"}) == _look({"performance": "balanced"})
+    assert _look({"performance": "nonsense"}) == _look({"performance": "balanced"})
+
+
+def test_custom_takes_the_sites_own_values_and_presets_ignore_them():
+    own = {"color_depth": "8", "wallpaper": True, "theming": False, "font_smoothing": False}
+    custom = _look({"performance": "custom", **own})
+    assert custom["color-depth"] == "8"
+    assert custom["enable-wallpaper"] == "true" and custom["enable-theming"] == ""
+    assert custom["enable-font-smoothing"] == ""
+    # A preset wins over leftover custom values.
+    assert _look({"performance": "slow", **own}) == _look({"performance": "slow"})
+    # Custom with nothing set is Balanced.
+    assert _look({"performance": "custom"}) == _look({"performance": "balanced"})
+
+
+def test_performance_and_hidpi_round_trip(world, monkeypatch):
+    from services.rdp_ws import rdp_options
+    from services.session_service import SessionService
+
+    _db, ids = world
+    monkeypatch.setenv("GANXTERM_GUACD", "guacd:4822")
+    pam = svc(SessionService, ids["pam"], "power")
+    site = pam.save(name="c", host="h", port=3389, session_type="rdp",
+                    options={"performance": "custom", "color_depth": "24",
+                             "animations": True, "hidpi": True})["id"]
+    got = pam.get(site)["options"]
+    assert got["performance"] == "custom" and got["color_depth"] == "24"
+    assert got["animations"] is True and got["hidpi"] is True
+    assert rdp_options({"options": json.dumps(got)})["hidpi"] is True
+    assert rdp_options({"options": "{}"})["hidpi"] is False     # opt-in

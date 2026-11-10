@@ -570,6 +570,22 @@ browser (guacamole-common-js) ⇄ /ws/rdp/<id> ⇄ rdp_ws.py ⇄ TCP ⇄ guacd �
 - **guacd reports some failures after `ready`** (NLA against xrdp: `error
   "Security negotiation failed…" 769`), so the pump rewrites every `error` into
   words (`guac.status_message`), not only the handshake's.
+- **guacd 1.6.0 can abort a session mid-stream** (#87: `GUAC_ASSERT in
+  guac_display_remove_layer()`, seen once against Homelab's xrdp 0.10.6).
+  Two things made that look like a frozen desktop:
+  - **guacd's main process stands between us and the session's process** and
+    notices a dead one only when it has something to pass on. The tunnel's
+    pings are answered by the relay, so an idle page sent guacd nothing and
+    the picture froze until the next mouse move. The relay now forwards a
+    `nop` with a browser ping at most every 2 s (`_GUACD_NOP_SECONDS`), and a
+    killed session shows as dropped in ~2 s, measured.
+  - **A crash closes the stream without `error` or `disconnect`**, so the
+    page only knew "disconnected". The pump now sends its own `error` (`_LOST`)
+    when guacd's stream ends without one of those (instructions behind `ready`
+    count too). The pane turns it into `securityfailure`, and the Reconnect
+    placeholder keeps the reason (`ix-reconnect-note`) after the toast fades.
+    To reproduce: `kill -ABRT` the per-connection guacd process (its parent
+    is pid 1 in the guacd container) while a desktop is open.
 - **Certificates (#61):** `rdp_cert.probe` speaks X.224 Connection Request +
   RDP_NEG_REQ (TLS|CredSSP), then TLS over a MemoryBIO (so it works on a
   paramiko channel too) and pins `rdp-sha256:<hex>` in `host_key`. guacd 1.6

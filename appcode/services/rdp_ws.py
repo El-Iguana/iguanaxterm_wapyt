@@ -27,6 +27,7 @@ import json
 import logging
 import socket
 import threading
+import time
 import uuid
 from typing import Optional
 from urllib.parse import parse_qs
@@ -52,6 +53,12 @@ _CONNECT_TIMEOUT = 10
 _UPSTREAM_ERROR = "512"
 _UNREACHABLE = "519"
 _FORBIDDEN = "771"
+_GUACD_NOP_SECONDS = 2.0    # how often an idle desktop checks guacd is still there (#87)
+# guacd ends a session it means to end with one of these; anything else is a crash.
+_GUACD_ENDINGS = ("error", "disconnect")
+_LOST = ("The connection to the remote desktop was lost unexpectedly (guacd ended the "
+         "session without saying why). The desktop usually keeps running: "
+         "Reconnect to pick up where you left off.")
 
 RDP_SECURITY = ("any", "nla", "tls", "rdp")
 RDP_RESIZE = ("display-update", "reconnect", "none")
@@ -572,6 +579,10 @@ async def desktop(websocket: WebSocket, session_id: int) -> None:
 
     def _pump() -> None:
         """guacd -> browser, whole instructions per message, on a worker thread."""
+        # guacd sent "error" or "disconnect" before closing. Instructions that
+        # came in right behind "ready" went out with the tunnel uuid, so count them.
+        said_why = any(elements and elements[0] in _GUACD_ENDINGS
+                       for _raw, elements in guac.Splitter().feed("".join(trailing)))
         try:
             while not stop.is_set():
                 data = sock.recv(_READ_SIZE)
@@ -579,13 +590,28 @@ async def desktop(websocket: WebSocket, session_id: int) -> None:
                     break
                 ready = splitter.feed(data)
                 if ready:
+                    said_why = said_why or any(
+                        elements and elements[0] in _GUACD_ENDINGS for _raw, elements in ready)
                     text = "".join(_readable(raw, elements, gateway) for raw, elements in ready)
                     asyncio.run_coroutine_threadsafe(websocket.send_text(text), loop).result()
         except Exception as exc:
             logger.debug("rdp pump ended: %s", exc)
         finally:
             if not stop.is_set():
-                asyncio.run_coroutine_threadsafe(websocket.close(), loop)
+                if not said_why:
+                    # guacd went away without a word: its session process died
+                    # (#87). Say so, or the page shows a frozen picture and
+                    # then a bare "disconnected".
+                    logger.warning("rdp: guacd ended session %s without a reason", session_id)
+                asyncio.run_coroutine_threadsafe(_end(None if said_why else _LOST), loop)
+
+    async def _end(reason: Optional[str]) -> None:
+        try:
+            if reason:
+                await websocket.send_text(guac.encode("error", reason, _UPSTREAM_ERROR))
+            await websocket.close()
+        except Exception:
+            pass
 
     pump = threading.Thread(target=_pump, name="rdp-pump", daemon=True)
     pump.start()
@@ -595,6 +621,7 @@ async def desktop(websocket: WebSocket, session_id: int) -> None:
     )
 
     inbound = guac.Splitter()
+    last_nop = 0.0
     try:
         while True:
             message = await websocket.receive_text()
@@ -605,6 +632,16 @@ async def desktop(websocket: WebSocket, session_id: int) -> None:
                     # The tunnel's own keepalive: answer it here, guacd never sees it.
                     if len(elements) > 1 and elements[1] == "ping":
                         await websocket.send_text(raw)
+                        # ...but guacd hears a "nop" now and then. Its main
+                        # process relays between us and the session's process,
+                        # and notices that one died only when it has something
+                        # to pass on. An idle page sends nothing, so a crashed
+                        # session froze the picture until the next mouse move
+                        # (#87). This makes the drop show within seconds.
+                        now = time.monotonic()
+                        if now - last_nop >= _GUACD_NOP_SECONDS:
+                            last_nop = now
+                            outgoing.append(guac.encode("nop"))
                     continue
                 if opcode in guac.CLIENT_FORBIDDEN:
                     logger.warning("rdp: dropped a client %r after the handshake", opcode)

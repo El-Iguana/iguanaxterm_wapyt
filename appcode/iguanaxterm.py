@@ -1169,13 +1169,16 @@ class IguanaXterm(MainWindow):
             clean = bool(getattr(event.detail, "clean", False))
             current["rfb"] = None
             current["dialled"] = False
+            # noVNC fires securityfailure, then disconnect. The first carries
+            # the reason (a refused password, an unreachable host, or the RDP
+            # relay's "lost unexpectedly", #87); a generic "disconnected" here
+            # would replace it before anyone could read it. The placeholder
+            # keeps it after the toast has gone.
+            refused = current.pop("refused", "")
             session = self._session(current["session_id"])
             if session:
-                self._show_reconnect(pane_id, session)
-            # noVNC fires securityfailure, then disconnect. The first carries
-            # the reason (a refused password, an unreachable host); a generic
-            # "disconnected" here would replace it before anyone could read it.
-            refused = current.pop("refused", "")
+                note = refused or ("" if clean else "The remote desktop disconnected.")
+                self._show_reconnect(pane_id, session, note=note)
             if refused:
                 self._toast(f"{current['name']}: {refused}", kind="error")
             elif not clean:
@@ -1324,9 +1327,9 @@ class IguanaXterm(MainWindow):
         if text != pane.get("clip_sent"):
             self._toast(f"Copied {len(text)} characters from the desktop.", kind="success")
 
-    def _show_reconnect(self, pane_id: str, session: dict) -> None:
+    def _show_reconnect(self, pane_id: str, session: dict, note: str = "") -> None:
         """
-        A restored pane, not yet dialled.
+        A restored pane, not yet dialled, or a dropped one (``note`` says why).
 
         Restoring a layout deliberately does not connect: N simultaneous SSH
         dials on page load is the pattern that trips MaxStartups and produces
@@ -1336,11 +1339,13 @@ class IguanaXterm(MainWindow):
         if not host:
             return
         label = f"{session.get('username') or ''}@{session.get('host', '')}".lstrip("@")
+        reason = f'  <div class="ix-reconnect-note">{html.escape(note)}</div>' if note else ""
         host.innerHTML = (
             f'<div class="ix-reconnect">'
             f'  <span class="mdi mdi-power-plug-off ix-reconnect-icon"></span>'
-            f'  <div class="ix-reconnect-name">{session["name"]}</div>'
-            f'  <div class="ix-reconnect-host">{label}</div>'
+            f'  <div class="ix-reconnect-name">{html.escape(session["name"])}</div>'
+            f'  <div class="ix-reconnect-host">{html.escape(label)}</div>'
+            f"{reason}"
             f'  <button type="button" class="ix-reconnect-btn" data-reconnect="{pane_id}">'
             f'    <span class="mdi mdi-connection"></span><span>Reconnect</span></button>'
             f"</div>"
@@ -3848,6 +3853,7 @@ _GRID_CSS = """
 .ix-reconnect-icon{font-size:30px;color:#334155;}
 .ix-reconnect-name{color:#e2e8f0;font:600 14px system-ui,sans-serif;}
 .ix-reconnect-host{color:#64748b;font:11px ui-monospace,Menlo,Consolas,monospace;}
+.ix-reconnect-note{max-width:42ch;color:#fbbf24;font:12px/1.45 system-ui,sans-serif;}
 .ix-reconnect-btn{display:inline-flex;align-items:center;gap:6px;margin-top:8px;
   padding:7px 15px;color:#e2e8f0;background:#1e293b;border:1px solid #334155;
   border-radius:7px;cursor:pointer;font:13px system-ui,sans-serif;}

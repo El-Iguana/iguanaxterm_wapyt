@@ -65,7 +65,11 @@ from services.about_service import AboutService
 from services.downloads import DownloadService
 from services.layout_service import LayoutService
 from services.paths import (
+    RDP_COLOR_DEPTHS,
+    RDP_EFFECTS,
     RDP_KEYBOARDS,
+    RDP_PERFORMANCE,
+    RDP_PRESETS,
     RDP_RESIZE,
     RDP_SECURITY,
     SESSION_TYPES,
@@ -1125,9 +1129,12 @@ class IguanaXterm(MainWindow):
             # screen element, so the Ctrl+V trick listens one level up.
             host.innerHTML = '<div class="ix-rdp" tabindex="0"></div>'
             screen = host.querySelector(".ix-rdp")
+            rdp_options = (session.get("options") or {}) if session else {}
             rfb = js.window.IxRDP.new(
                 screen, f"{scheme}://{js.location.host}/ws/rdp/{pane['session_id']}",
-                self._muted(pane["session_id"]),
+                to_js({"muted": self._muted(pane["session_id"]),
+                       "hidpi": bool(rdp_options.get("hidpi", False))},
+                      dict_converter=js.Object.fromEntries),
             )
             key_target = host
         else:
@@ -2977,6 +2984,24 @@ class IguanaXterm(MainWindow):
                                 value=bool(rdp.get("audio", True)), span=2,
                                 help="Off saves bandwidth on slow links. Each pane "
                                      "also has a Mute button."),
+                    # Performance (#74). Custom shows the colour depth and effects.
+                    FieldConfig(id="performance", label="Performance", type="select",
+                                value=rdp.get("performance", "balanced"),
+                                options=[SelectOption(k, v) for k, v in RDP_PERFORMANCE],
+                                help="Best quality turns on every Windows effect; Slow "
+                                     "link uses 16-bit colour and turns them all off."),
+                    FieldConfig(id="color_depth", label="Colour depth", type="select",
+                                value=str(rdp.get("color_depth", "")),
+                                options=[SelectOption(k, v) for k, v in RDP_COLOR_DEPTHS]),
+                    *[FieldConfig(id=key, label=label, type="checkbox",
+                                  value=bool(rdp.get(key, RDP_PRESETS["balanced"][key])))
+                      for key, _param, label in RDP_EFFECTS],
+                    FieldConfig(id="hidpi", label="Use every pixel on high-DPI screens",
+                                type="checkbox", value=bool(rdp.get("hidpi", False)), span=2,
+                                help="Sharper, but Windows draws everything smaller (half "
+                                     "size on a 2x screen). Raise the display scaling inside "
+                                     "Windows to make it bigger again. Off: normal size, a "
+                                     "little soft."),
                     FieldConfig(id="description", label="Description",
                                 value=existing.get("description", ""), span=2),
                 ],
@@ -2985,6 +3010,9 @@ class IguanaXterm(MainWindow):
         )
 
         def _on_type_change(payload: dict) -> None:
+            if payload.get("id") == "performance":
+                _apply_performance("rdp", payload.get("value"))
+                return
             if payload.get("id") != "session_type":
                 return
             # Each type has its own default port. Telnet has no user or key
@@ -3003,6 +3031,16 @@ class IguanaXterm(MainWindow):
             form.set_field_disabled("via_session_id", not session_caps(session_type)["desktop"])
             for field in _RDP_FIELDS:
                 if session_type == "rdp":
+                    form.show_field(field)
+                else:
+                    form.hide_field(field)
+            _apply_performance(session_type, form.get_values().get("performance"))
+
+        def _apply_performance(session_type: str, performance) -> None:
+            """Colour depth and the effects show only for Custom (#74)."""
+            custom = session_type == "rdp" and performance == "custom"
+            for field in _RDP_CUSTOM_FIELDS:
+                if custom:
                     form.show_field(field)
                 else:
                     form.hide_field(field)
@@ -3037,6 +3075,10 @@ class IguanaXterm(MainWindow):
                         "keyboard": values.get("keyboard") or "en-us-qwerty",
                         "console": bool(values.get("console")),
                         "audio": bool(values.get("audio")),
+                        "performance": values.get("performance") or "balanced",
+                        "color_depth": values.get("color_depth") or "",
+                        **{key: bool(values.get(key)) for key, _param, _label in RDP_EFFECTS},
+                        "hidpi": bool(values.get("hidpi")),
                     }
                 # An empty secret field means "unchanged" when one is stored,
                 # and the service's sentinel default expresses that by omission.
@@ -3862,7 +3904,10 @@ _SFTP_CSS = """
 """
 
 # The session editor's RDP-only fields (#56), shown for RDP sites alone.
-_RDP_FIELDS = ("domain", "security", "resize", "keyboard", "console", "audio")
+_RDP_FIELDS = ("domain", "security", "resize", "keyboard", "console", "audio",
+               "performance", "hidpi")
+# Shown only when Performance is Custom (#74).
+_RDP_CUSTOM_FIELDS = ("color_depth", *(key for key, _param, _label in RDP_EFFECTS))
 
 # services/live.py REVOKED, which the relay sends when access is taken away.
 _ACCESS_REMOVED = "Access to this site was removed."

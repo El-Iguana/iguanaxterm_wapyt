@@ -98,7 +98,10 @@ It checks: the desktop draws (real pixels off guacamole's canvases), the
 certificate is pinned, typing and Ctrl+Alt+Del reach the session (marker
 files, via `podman exec`), the remote screen follows a resize, the clipboard
 works both ways, sound reaches the pane and Mute drops it (and is remembered
-per site), NLA against xrdp is explained as a refused login, the
+per site), the Custom performance fields show and hide, Slow link and Best
+quality sites connect, "Use every pixel" doubles the desktop's pixels on a
+2x screen (a second browser context with `device_scale_factor=2`), NLA
+against xrdp is explained as a refused login, the
 tunnel-only port connects through SSH and is pinned too, and a rotated
 certificate is refused until **Forget host key**. `IX_RDP_HOST`,
 `IX_RDP_SSH_HOST` and `IX_RDP_CONTAINER` point it at a target on a

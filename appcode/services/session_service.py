@@ -31,7 +31,11 @@ from services.auth import current_user_id
 from services.db import current_role, encrypt, get_db
 from services.roles import ADMIN, POWER, at_least
 from services import guacd
-from services.paths import RDP_KEYBOARDS, RDP_RESIZE, RDP_SECURITY, SESSION_TYPES, session_caps
+from services.paths import (
+    RDP_COLOR_DEPTHS, RDP_EFFECTS, RDP_KEYBOARDS, RDP_PERFORMANCE, RDP_PRESETS, RDP_RESIZE,
+    RDP_SECURITY,
+    SESSION_TYPES, session_caps,
+)
 
 # Columns that are safe to hand to the browser.
 _PUBLIC_COLUMNS = (
@@ -74,6 +78,16 @@ def clean_rdp_options(options: Any) -> tuple[dict, dict]:
     keyboard = given.get("keyboard") or "en-us-qwerty"
     if keyboard not in {key for key, _label in RDP_KEYBOARDS}:
         errors["keyboard"] = "Unknown keyboard layout"
+    performance = given.get("performance") or "balanced"
+    if performance not in {key for key, _label in RDP_PERFORMANCE}:
+        errors["performance"] = "Unknown performance setting"
+    color_depth = str(given.get("color_depth") or "")
+    if color_depth not in {key for key, _label in RDP_COLOR_DEPTHS}:
+        errors["color_depth"] = "Unknown colour depth"
+    # Custom's own values are kept whatever the preset, so switching to a
+    # preset and back doesn't lose them (#74).
+    effects = {key: bool(given.get(key, RDP_PRESETS["balanced"][key]))
+               for key, _param, _label in RDP_EFFECTS}
     return {
         "domain": domain,
         "security": security,
@@ -81,6 +95,10 @@ def clean_rdp_options(options: Any) -> tuple[dict, dict]:
         "keyboard": keyboard,
         "console": bool(given.get("console")),
         "audio": bool(given.get("audio", True)),     # play the desktop's sound (#73)
+        "performance": performance,
+        "color_depth": color_depth,
+        **effects,
+        "hidpi": bool(given.get("hidpi", False)),    # every physical pixel (#74)
     }, errors
 
 

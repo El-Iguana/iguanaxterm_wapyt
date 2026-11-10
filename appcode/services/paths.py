@@ -295,6 +295,58 @@ RDP_KEYBOARDS = (
     ("failsafe", "Unicode (any layout, fallback)"),
 )
 
+# Performance (#74): a preset sets guacd's colour depth and the Windows
+# effects that cost bandwidth. "custom" takes them from the site instead.
+RDP_PERFORMANCE = (
+    ("best", "Best quality (fast network)"),
+    ("balanced", "Balanced (default)"),
+    ("slow", "Slow link"),
+    ("custom", "Custom"),
+)
+RDP_COLOR_DEPTHS = (
+    ("", "Server's choice"),
+    ("32", "True colour (32-bit)"),
+    ("24", "24-bit"),
+    ("16", "High colour (16-bit)"),
+    ("8", "256 colours (8-bit)"),
+)
+# The effects, in the order the editor shows them: option key, guacd
+# parameter, label.
+RDP_EFFECTS = (
+    ("wallpaper", "enable-wallpaper", "Wallpaper"),
+    ("theming", "enable-theming", "Themes"),
+    ("font_smoothing", "enable-font-smoothing", "Font smoothing"),
+    ("window_drag", "enable-full-window-drag", "Show window contents while dragging"),
+    ("composition", "enable-desktop-composition", "Desktop composition (Aero)"),
+    ("animations", "enable-menu-animations", "Menu animations"),
+)
+_ALL_EFFECTS = {key: True for key, _param, _label in RDP_EFFECTS}
+_NO_EFFECTS = {key: False for key, _param, _label in RDP_EFFECTS}
+RDP_PRESETS = {
+    "best": {"color_depth": "32", **_ALL_EFFECTS},
+    "balanced": {"color_depth": "", **_NO_EFFECTS, "theming": True, "font_smoothing": True},
+    "slow": {"color_depth": "16", **_NO_EFFECTS},
+}
+
+
+def rdp_look(options: dict) -> dict:
+    """
+    Colour depth and effects for a site's options (#74). A preset gives its
+    own values; "custom" takes each from the options, falling back to
+    Balanced for anything unset. Unknown presets are Balanced.
+    """
+    performance = options.get("performance") or "balanced"
+    if performance in RDP_PRESETS:
+        return dict(RDP_PRESETS[performance])
+    look = dict(RDP_PRESETS["balanced"])
+    depth = str(options.get("color_depth") or "")
+    if depth in {key for key, _label in RDP_COLOR_DEPTHS}:
+        look["color_depth"] = depth
+    for key, _param, _label in RDP_EFFECTS:
+        if key in options:
+            look[key] = bool(options[key])
+    return look
+
 
 def session_caps(session_type: str | None) -> dict:
     """The capability row for a type; an unknown type is treated as SSH."""

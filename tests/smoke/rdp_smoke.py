@@ -17,6 +17,8 @@ What it pins:
   - the remote desktop follows a resize of the pane
   - clipboard both ways: the desktop's copy lands here; Paste to desktop and
     Ctrl+V put this computer's text there
+  - sound (#73): noise played in the session reaches the pane; Mute drops it,
+    is remembered for the site, and unmuting plays again
   - a refused login (NLA against xrdp) is explained
   - the tunnel: a site reachable only through the SSH target connects
   - a changed certificate is refused with the host-key message, and
@@ -69,6 +71,11 @@ def pinned(name):
     with sqlite3.connect(os.path.join(DATA_DIR, "iguanaxterm.db")) as conn:
         row = conn.execute("SELECT host_key FROM sessions WHERE name = ?", (name,)).fetchone()
     return row[0] if row else ""
+
+
+def site_id(name):
+    with sqlite3.connect(os.path.join(DATA_DIR, "iguanaxterm.db")) as conn:
+        return conn.execute("SELECT id FROM sessions WHERE name = ?", (name,)).fetchone()[0]
 
 
 def visible_form(page):
@@ -222,6 +229,36 @@ with sync_playwright() as p:
     page.wait_for_timeout(2000)
     remote = target("xclip -o -selection clipboard")
     check(remote == again, "Ctrl+V sends this computer's clipboard first", remote)
+
+    # ── sound (#73) ──────────────────────────────────────────────────────────
+    audio = "p => ({...document.querySelector(`#pane-term-${p} .ix-rdp`).ixRdp.audio})"
+
+    def play_noise(seconds=2):
+        subprocess.run(["podman", "exec", "-u", "testuser", TARGET, "/play-noise.sh",
+                        str(44100 * 4 * seconds)], capture_output=True, timeout=30)
+        page.wait_for_timeout(1500)
+
+    start = page.evaluate(audio, pane)
+    play_noise()
+    heard = page.evaluate(audio, pane)
+    check(heard["streams"] >= 1 and heard["played"] > start["played"],
+          "sound played in the session reaches the pane", f"{start} -> {heard}")
+    mute = f'[data-pane-mute="{pane}"]'
+    page.click(mute)
+    page.wait_for_timeout(300)
+    check(page.get_attribute(mute, "aria-pressed") == "true", "Mute shows as pressed")
+    play_noise()
+    muted = page.evaluate(audio, pane)
+    check(muted["received"] > heard["received"] and muted["played"] == heard["played"],
+          "while muted, sound arrives but isn't played", f"{heard} -> {muted}")
+    check(page.evaluate("id => localStorage.getItem(`ix-rdp-muted-${id}`)", site_id("win-box")) == "1",
+          "the mute is remembered for the site")
+    page.click(mute)
+    page.wait_for_timeout(300)
+    play_noise()
+    again_heard = page.evaluate(audio, pane)
+    check(again_heard["played"] > muted["played"], "unmuting plays sound again",
+          f"{muted} -> {again_heard}")
     close_pane(page, pane)
 
     # ── a refused login is explained ─────────────────────────────────────────

@@ -97,13 +97,16 @@ def local_address_towards(host: str) -> str:
 
 
 def handshake(params: dict, width: int, height: int, dpi: int,
-              timezone: str = "UTC") -> tuple[socket.socket, str, guac.ByteSplitter, list[str]]:
+              timezone: str = "UTC", audio: tuple = ()) -> tuple[socket.socket, str, guac.ByteSplitter, list[str]]:
     """
     Open guacd and make the RDP connection, IguanaXterm side (#57).
 
     1. ``select rdp``; 2. read ``args``; 3. ``size``, ``audio``, ``video``,
     ``image``, ``timezone``; 4. ``connect`` with the values in the order
     guacd asked for them; 5. wait for ``ready``.
+
+    ``audio`` is the sound formats the browser can play (#73); empty means
+    none, so guacd sends no sound even if the connection asks for it.
 
     Returns the socket, the connection id, the splitter (it may hold bytes
     guacd sent right behind ``ready``) and those instructions, already split.
@@ -140,7 +143,7 @@ def handshake(params: dict, width: int, height: int, dpi: int,
         args, _ = _expect("args")
         for instruction in (
             guac.encode("size", width, height, dpi),
-            guac.encode("audio"),
+            guac.encode("audio", *audio),
             guac.encode("video"),
             # Not image/webp: Chrome decodes it through VideoFrame, and
             # guacamole-common-js 1.6 leaves those for the garbage collector,

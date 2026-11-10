@@ -475,6 +475,17 @@ browser (guacamole-common-js) ⇄ /ws/rdp/<id> ⇄ rdp_ws.py ⇄ TCP ⇄ guacd �
 - **Lengths count characters, not bytes**, so the guacd byte stream is
   decoded incrementally before it is split (`guac.ByteSplitter`); a chunk
   boundary inside a UTF-8 sequence is normal.
+- **Sound (#73):** the `audio` handshake line offers `audio/L16`, `audio/L8`
+  (raw PCM, the only formats guacamole-common-js plays), or nothing when the
+  site's "Play the desktop's sound" is off; `disable-audio` follows the same
+  switch. Sites saved before #73 have no `audio` key and get sound. The pane
+  plays it with guacamole's `RawAudioPlayer` and **mutes by dropping packets**
+  in a wrapped `stream.onblob`, so unmuting is live with no backlog; the
+  shared `AudioContext` is resumed on the pane's first click or key. Muted is
+  per site in `localStorage` (`ix-rdp-muted-<id>`). `IxRDP.audio` counts
+  streams / received / played for the smoke test. The xrdp target is on
+  **trixie** for `pipewire-module-xrdp` (bookworm has no xrdp audio module);
+  `/play-noise.sh` in it plays noise into the session.
 - **guacd reports some failures after `ready`** (NLA against xrdp: `error
   "Security negotiation failed…" 769`), so the pump rewrites every `error` into
   words (`guac.status_message`), not only the handshake's.
@@ -513,7 +524,7 @@ browser (guacamole-common-js) ⇄ /ws/rdp/<id> ⇄ rdp_ws.py ⇄ TCP ⇄ guacd �
 - Tests: `test_guac.py` (framing), `test_rdp.py` (a fake guacd on a socket
   checks handshake order, the dropped `connect`, error wording, sharing),
   `test_rdp_live.py` (real guacd + xrdp, skipped without them),
-  `tests/smoke/rdp_smoke.py` (15 checks; see the smoke README). xrdp is not
+  `tests/smoke/rdp_smoke.py` (20 checks; see the smoke README). xrdp is not
   Windows: NLA and real Windows certificates are checked by hand.
 
 ### Folder downloads without a folder picker are saved on the server

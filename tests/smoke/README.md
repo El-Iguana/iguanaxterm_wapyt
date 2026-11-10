@@ -78,7 +78,9 @@ python3 tests/smoke/site_lists_smoke.py
 xrdp with an Xfce desktop, a terminal opened at login, `xclip`, and `sshd`.
 xrdp listens on 3389 (published) and, through `socat`, on the container's own
 `127.0.0.1:3390`, which only the SSH tunnel can reach. Ctrl+Alt+Del is bound
-to `touch /tmp/cad-pressed`; `/rotate-cert.sh` gives xrdp a new certificate.
+to `touch /tmp/cad-pressed`; `/rotate-cert.sh` gives xrdp a new certificate;
+`/play-noise.sh` plays noise into the session's PipeWire, which xrdp sends as
+RDP sound (#73).
 
 ```bash
 podman build -t iguanaxterm-rdptest -f tests/smoke/Containerfile.rdptarget tests/smoke
@@ -95,7 +97,8 @@ IX_DATA_DIR=/tmp/ixrdp python3 tests/smoke/rdp_smoke.py
 It checks: the desktop draws (real pixels off guacamole's canvases), the
 certificate is pinned, typing and Ctrl+Alt+Del reach the session (marker
 files, via `podman exec`), the remote screen follows a resize, the clipboard
-works both ways, NLA against xrdp is explained as a refused login, the
+works both ways, sound reaches the pane and Mute drops it (and is remembered
+per site), NLA against xrdp is explained as a refused login, the
 tunnel-only port connects through SSH and is pinned too, and a rotated
 certificate is refused until **Forget host key**. `IX_RDP_HOST`,
 `IX_RDP_SSH_HOST` and `IX_RDP_CONTAINER` point it at a target on a

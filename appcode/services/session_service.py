@@ -80,6 +80,7 @@ def clean_rdp_options(options: Any) -> tuple[dict, dict]:
         "resize": resize,
         "keyboard": keyboard,
         "console": bool(given.get("console")),
+        "audio": bool(given.get("audio", True)),     # play the desktop's sound (#73)
     }, errors
 
 

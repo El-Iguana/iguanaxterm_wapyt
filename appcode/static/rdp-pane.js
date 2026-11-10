@@ -4,7 +4,7 @@
 // app's pane code drives a VNC or an RDP desktop the same way:
 //
 //   calls:  disconnect(), focus(), sendCtrlAltDel(), sendKey(keysym),
-//           clipboardPasteFrom(text)
+//           clipboardPasteFrom(text); RDP only: setMuted(bool)
 //   events: "connect", "disconnect" {clean}, "securityfailure" {reason},
 //           "clipboard" {text}
 //
@@ -21,9 +21,10 @@
   const STATE_DISCONNECTED = 5;
 
   class IxRDP extends EventTarget {
-    constructor(container, url) {
+    constructor(container, url, muted) {
       super();
       this.container = container;
+      this.muted = !!muted;
       this._closedByUs = false;
       this._reported = false;
       this._refusal = "";
@@ -78,6 +79,32 @@
       keyboard.onkeyup = (keysym) => client.sendKeyEvent(0, keysym);
       this.keyboard = keyboard;
       container.addEventListener("mousedown", () => this.focus());
+
+      // Sound (#73). guacamole's own RawAudioPlayer plays guacd's PCM; muting
+      // drops the packets rather than pausing, so unmuting is live, not a
+      // backlog. Browsers keep an AudioContext suspended until the page gets
+      // a click or a key, so the pane's first one wakes it.
+      // ``audio`` counts what arrived and what played, for tests and the console.
+      this.audio = { streams: 0, received: 0, played: 0 };
+      client.onaudio = (stream, mimetype) => {
+        const player = Guacamole.AudioPlayer.getInstance(stream, mimetype);
+        if (!player) return null;
+        this.audio.streams++;
+        const play = stream.onblob;
+        stream.onblob = (data) => {
+          this.audio.received++;
+          if (this.muted) return;
+          this.audio.played++;
+          play(data);
+        };
+        return player;
+      };
+      const wake = () => {
+        const context = Guacamole.AudioContextFactory.getAudioContext();
+        if (context && context.state === "suspended") context.resume().catch(() => {});
+      };
+      container.addEventListener("mousedown", wake);
+      container.addEventListener("keydown", wake);
 
       display.onresize = () => this._scale();
       this._observer = new ResizeObserver(() => {
@@ -197,6 +224,10 @@
       const writer = new Guacamole.StringWriter(stream);
       writer.sendText(text);
       writer.sendEnd();
+    }
+
+    setMuted(muted) {
+      this.muted = !!muted;
     }
 
     fullscreen() {

@@ -502,6 +502,25 @@ browser (guacamole-common-js) ⇄ /ws/rdp/<id> ⇄ rdp_ws.py ⇄ TCP ⇄ guacd �
   site's opt-in **Use every pixel** (`hidpi`) CSS × devicePixelRatio (capped
   at 3): crisp, half size. Before #74 it sent 96 × dpr DPI with CSS pixels,
   which guacd turned into the same CSS-sized desktop.
+- **Remote Desktop Gateway (#75), untested against a real gateway.** Settings
+  in `options` (`gateway_host`/`_port`/`_domain`/`_same_login`/`_username`,
+  `desktop_thumbprint`); the password is the encrypted `gateway_password`
+  column (three-state like `password`, decrypted only in `resolve_site`), the
+  pin is `gateway_key` (TOFU, `access.pin_gateway_key`). Changing the gateway
+  host/port, or the type, clears `gateway_key` (`json_extract` on the old
+  row); Forget host key clears both pins. A gateway plus `via_session_id` is
+  refused. `_prepare_gateway` probes the gateway with plain TLS
+  (`rdp_cert.probe_tls`) and passes `cert-fingerprints` = gateway print
+  [+ the desktop's thumbprint]. **Measured** (`test_rdp_gateway_live.py`,
+  guacd 1.6.0 = FreeRDP 2.11.7): FreeRDP checks `cert-fingerprints` for the
+  gateway's TLS too (`tls.c` `is_accepted_fingerprint`; a wrong print fails in
+  `rdg_tls_connect`), so the pin is enforced by guacd. **But** IguanaXterm
+  can't reach a desktop behind a gateway to read its certificate, and
+  `ignore-cert` is one switch for both TLS links: without the site's
+  `desktop_thumbprint` (Windows' SHA-1 Thumbprint, normalised by
+  `rdp_cert.thumbprint`) guacd gets `ignore-cert=true`, and the gateway pin is
+  enforced only by our probe just before connecting. guacd 1.6 has no
+  gateway-certificate parameter of its own.
 - **No multi-monitor:** guacd 1.6's `args` has no monitor or span parameter,
   and display updates send one primary monitor.
 - **guacd reports some failures after `ready`** (NLA against xrdp: `error
@@ -542,7 +561,8 @@ browser (guacamole-common-js) ⇄ /ws/rdp/<id> ⇄ rdp_ws.py ⇄ TCP ⇄ guacd �
 - Tests: `test_guac.py` (framing), `test_rdp.py` (a fake guacd on a socket
   checks handshake order, the dropped `connect`, error wording, sharing),
   `test_rdp_live.py` (real guacd + xrdp, skipped without them),
-  `tests/smoke/rdp_smoke.py` (25 checks; see the smoke README). xrdp is not
+  `tests/smoke/rdp_smoke.py` (27 checks; see the smoke README),
+  `test_rdp_gateway_live.py` (real guacd, a TLS stand-in for the gateway). xrdp is not
   Windows: NLA and real Windows certificates are checked by hand.
 
 ### Folder downloads without a folder picker are saved on the server

@@ -35,7 +35,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from services import guac, guacd, live, rdp_cert
 from services import ssh as ssh_helpers
-from services.access import host_key_message, pin_host_key, resolve_site
+from services.access import host_key_message, pin_gateway_key, pin_host_key, resolve_site
 from services.auth import current_user_id
 from services.paths import RDP_EFFECTS, RDP_PERFORMANCE, rdp_look, session_caps
 from services.terminal_ws import CLOSE_FORBIDDEN, CLOSE_NOT_FOUND, CLOSE_UNAUTHENTICATED, _same_origin
@@ -84,6 +84,13 @@ def rdp_options(profile: dict) -> dict:
         # Every physical pixel on a high-DPI screen (#74), opt-in; the pane reads it.
         "hidpi": bool(stored.get("hidpi", False)),
         **{key: stored[key] for key in ("color_depth", *EFFECT_KEYS) if key in stored},
+        # Remote Desktop Gateway (#75); no host means none.
+        "gateway_host": str(stored.get("gateway_host") or ""),
+        "gateway_port": _clamp(stored.get("gateway_port"), 1, 65535, 443),
+        "gateway_domain": str(stored.get("gateway_domain") or ""),
+        "gateway_same_login": bool(stored.get("gateway_same_login", True)),
+        "gateway_username": str(stored.get("gateway_username") or ""),
+        "desktop_thumbprint": str(stored.get("desktop_thumbprint") or ""),
     }
 
 
@@ -103,7 +110,7 @@ def guacd_params(profile: dict, hostname: str, port: int) -> dict:
     options = rdp_options(profile)
     username, domain = split_login(profile.get("username") or "", options["domain"])
     look = rdp_look(options)
-    return {
+    params = {
         "hostname": hostname,
         "port": str(port),
         "username": username,
@@ -118,6 +125,23 @@ def guacd_params(profile: dict, hostname: str, port: int) -> dict:
         "color-depth": look["color_depth"],
         **{param: "true" if look[key] else "" for key, param, _label in RDP_EFFECTS},
     }
+    if options["gateway_host"]:
+        # The gateway's login is the desktop's unless the site says otherwise.
+        if options["gateway_same_login"]:
+            gw_user, gw_domain = username, domain
+            gw_password = profile.get("password") or ""
+        else:
+            gw_user, gw_domain = split_login(options["gateway_username"],
+                                             options["gateway_domain"])
+            gw_password = profile.get("gateway_password") or ""
+        params.update({
+            "gateway-hostname": options["gateway_host"],
+            "gateway-port": str(options["gateway_port"]),
+            "gateway-domain": gw_domain,
+            "gateway-username": gw_user,
+            "gateway-password": gw_password,
+        })
+    return params
 
 
 def _clamp(value, low: int, high: int, default: int) -> int:
@@ -266,6 +290,60 @@ def _check_certificate(profile: dict, open_stream) -> Optional[str]:
     return seen
 
 
+def _check_gateway(profile: dict) -> str:
+    """
+    The gateway's certificate against its pin (#75), like the desktop's
+    (#61) but over plain TLS: a gateway speaks HTTPS. Pins on first use.
+    Returns the pin; raises HostKeyChanged for a different one.
+    """
+    options = rdp_options(profile)
+    host, port = options["gateway_host"], options["gateway_port"]
+    try:
+        seen = rdp_cert.probe_tls(host, port, timeout=_CONNECT_TIMEOUT)
+    except rdp_cert.CertProbeError as exc:
+        raise guacd.GuacdError(
+            f"Couldn't reach the Remote Desktop Gateway at {host}:{port} ({exc}).",
+            _UNREACHABLE,
+        ) from exc
+    pinned = profile.get("gateway_key") or ""
+    if not pinned:
+        pin_gateway_key(int(profile["id"]))(seen)
+    elif pinned != seen:
+        raise ssh_helpers.HostKeyChanged(f"{host} (the gateway)", pinned, seen)
+    return seen
+
+
+def _prepare_gateway(profile: dict, width: int, height: int, dpi: int):
+    """
+    A desktop behind a Remote Desktop Gateway (#75). guacd reaches it through
+    the gateway, so IguanaXterm can't read the desktop's certificate itself:
+
+    - the gateway's certificate is pinned, and guacd is told to accept exactly
+      it (FreeRDP checks ``cert-fingerprints`` for the gateway's TLS too);
+    - the desktop's is checked only if the site has its thumbprint. Without
+      one guacd must ignore certificates, and then the gateway's pin is
+      enforced only by the check just before connecting.
+    """
+    options = rdp_options(profile)
+    if int(profile.get("via_session_id") or 0):
+        raise guacd.GuacdError(
+            "This desktop is set to use both a Remote Desktop Gateway and an SSH tunnel. "
+            "Edit it and choose Directly.", _UNREACHABLE,
+        )
+    gateway_pin = _check_gateway(profile)
+    params = guacd_params(profile, profile.get("host") or "", int(profile.get("port") or 3389))
+    prints = [rdp_cert.guacd_fingerprint(gateway_pin)]
+    if options["desktop_thumbprint"]:
+        prints.append(options["desktop_thumbprint"])
+    params["cert-fingerprints"] = ",".join(prints)
+    params["ignore-cert"] = "false" if options["desktop_thumbprint"] else "true"
+    audio = AUDIO_TYPES if options["audio"] else ()
+    sock, _connection_id, splitter, trailing = guacd.handshake(
+        params, width, height, dpi, audio=audio
+    )
+    return sock, splitter, trailing, None
+
+
 # ── The route ────────────────────────────────────────────────────────────────
 
 
@@ -275,6 +353,8 @@ def _prepare(profile: dict, width: int, height: int, dpi: int):
     and the guacd handshake. Runs on a worker thread (it blocks).
     Returns (socket, splitter, trailing instructions, tunnel or None).
     """
+    if rdp_options(profile)["gateway_host"]:
+        return _prepare_gateway(profile, width, height, dpi)
     host = profile.get("host") or ""
     port = int(profile.get("port") or 3389)
     tunnel = None
@@ -340,12 +420,26 @@ def _resolve(host: str) -> str:
         return "*"
 
 
-def _readable(raw: str, elements: list[str]) -> str:
+# guacd codes worth a pointer to the gateway when there is one (#75):
+# unreachable, refused, unavailable, and a refused login.
+_GATEWAY_HINT_CODES = {"519", "516", "520", "769"}
+
+
+def with_gateway_hint(message: str, code: str, gateway: str) -> str:
+    """Point at the gateway when a failure may be its doing (#75)."""
+    if gateway and code in _GATEWAY_HINT_CODES and "Gateway" not in message:
+        return (f"{message} This desktop is reached through the Remote Desktop Gateway "
+                f"{gateway}: check its address and login too.")
+    return message
+
+
+def _readable(raw: str, elements: list[str], gateway: str = "") -> str:
     """guacd's "error" put in words for the page (guac.status_message)."""
     if elements and elements[0] == "error":
         code = elements[2] if len(elements) > 2 else _UPSTREAM_ERROR
         text = elements[1] if len(elements) > 1 else ""
-        return guac.encode("error", guac.status_message(code, text), code)
+        message = with_gateway_hint(guac.status_message(code, text), code, gateway)
+        return guac.encode("error", message, code)
     return raw
 
 
@@ -396,7 +490,8 @@ async def desktop(websocket: WebSocket, session_id: int) -> None:
         await _refuse(websocket, host_key_message(exc, access), _FORBIDDEN)
         return
     except guacd.GuacdError as exc:
-        await _refuse(websocket, exc.message, exc.code)
+        await _refuse(websocket, with_gateway_hint(
+            exc.message, exc.code, rdp_options(profile)["gateway_host"]), exc.code)
         return
     except Exception as exc:
         logger.exception("rdp: connecting failed")
@@ -404,6 +499,7 @@ async def desktop(websocket: WebSocket, session_id: int) -> None:
         return
 
     stop = threading.Event()
+    gateway = rdp_options(profile)["gateway_host"]
 
     def _close_upstream() -> None:
         stop.set()
@@ -442,7 +538,7 @@ async def desktop(websocket: WebSocket, session_id: int) -> None:
                     break
                 ready = splitter.feed(data)
                 if ready:
-                    text = "".join(_readable(raw, elements) for raw, elements in ready)
+                    text = "".join(_readable(raw, elements, gateway) for raw, elements in ready)
                     asyncio.run_coroutine_threadsafe(websocket.send_text(text), loop).result()
         except Exception as exc:
             logger.debug("rdp pump ended: %s", exc)

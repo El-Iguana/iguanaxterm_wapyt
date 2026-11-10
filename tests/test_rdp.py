@@ -39,7 +39,9 @@ def rdp_app(user_id: int, role: str):
 
 
 ARGS = ["args", "VERSION_1_5_0", "hostname", "port", "domain", "username", "password",
-        "security", "ignore-cert", "cert-fingerprints", "resize-method", "server-layout"]
+        "security", "ignore-cert", "cert-fingerprints", "resize-method", "server-layout",
+        "gateway-hostname", "gateway-port", "gateway-domain", "gateway-username",
+        "gateway-password"]
 
 
 class FakeGuacd:
@@ -142,7 +144,9 @@ def test_options_round_trip_and_no_secrets(rdp_site):
                               "performance": "balanced", "color_depth": "",
                               "wallpaper": False, "theming": True, "font_smoothing": True,
                               "window_drag": False, "composition": False, "animations": False,
-                              "hidpi": False}
+                              "hidpi": False, "gateway_host": "", "gateway_port": 443,
+                              "gateway_domain": "", "gateway_same_login": True,
+                              "gateway_username": "", "desktop_thumbprint": ""}
     listed = next(row for row in pam.list() if row["id"] == site)
     assert listed["options"] == got["options"]
     assert "rdp-secret-pw" not in json.dumps([got, pam.list()])
@@ -493,3 +497,273 @@ def test_performance_and_hidpi_round_trip(world, monkeypatch):
     assert got["animations"] is True and got["hidpi"] is True
     assert rdp_options({"options": json.dumps(got)})["hidpi"] is True
     assert rdp_options({"options": "{}"})["hidpi"] is False     # opt-in
+
+
+# --------------------------------------------------------------------------
+# Remote Desktop Gateway (#75)
+# --------------------------------------------------------------------------
+
+
+def _self_signed(tmp_path, name: str):
+    """A throwaway certificate and key, and the certificate's DER."""
+    import datetime
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject)
+            .public_key(key.public_key()).serial_number(x509.random_serial_number())
+            .not_valid_before(now).not_valid_after(now + datetime.timedelta(days=1))
+            .sign(key, hashes.SHA256()))
+    cert_path, key_path = tmp_path / f"{name}.crt", tmp_path / f"{name}.key"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM,
+                                           serialization.PrivateFormat.PKCS8,
+                                           serialization.NoEncryption()))
+    return cert_path, key_path, cert.public_bytes(serialization.Encoding.DER)
+
+
+class FakeGateway:
+    """A TLS server standing in for an RD Gateway: it only shows its certificate."""
+
+    def __init__(self, cert_path, key_path) -> None:
+        import ssl
+
+        self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        self.context.load_cert_chain(cert_path, key_path)
+        self.server = socket.socket()
+        self.server.bind(("127.0.0.1", 0))
+        self.server.listen(4)
+        self.port = self.server.getsockname()[1]
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def _serve(self) -> None:
+        while True:
+            try:
+                conn, _ = self.server.accept()
+            except OSError:
+                return
+            try:
+                with self.context.wrap_socket(conn, server_side=True) as tls:
+                    tls.recv(1)
+            except OSError:
+                pass
+
+    def close(self) -> None:
+        self.server.close()
+
+
+@pytest.fixture()
+def gateway(tmp_path):
+    cert, key, der = _self_signed(tmp_path, "rdgw")
+    fake = FakeGateway(cert, key)
+    yield fake, rdp_cert.fingerprint(der)
+    fake.close()
+
+
+def _gateway_site(pam, port: int, **options) -> int:
+    result = pam.save(
+        name="behind", host="desk-07.corp.local", port=3389, session_type="rdp",
+        username="CORP\\pam", password="desk-pw", gateway_password="gw-secret-pw",
+        options={"gateway_host": "127.0.0.1", "gateway_port": port, **options},
+    )
+    assert result["ok"], result
+    return result["id"]
+
+
+def test_thumbprints_are_normalised_for_freerdp():
+    windows = "‎" + "AB CD EF 01 23 45 67 89 AB CD EF 01 23 45 67 89 AB CD EF 01"
+    assert rdp_cert.thumbprint(windows) == "sha1:" + ":".join(
+        ["ab", "cd", "ef", "01", "23", "45", "67", "89"] * 2 + ["ab", "cd", "ef", "01"])
+    assert rdp_cert.thumbprint("aa" * 32).startswith("sha256:aa:aa")
+    assert rdp_cert.thumbprint("  ") == ""
+    for bad in ("xyz", "ab" * 19, "ab" * 33):
+        with pytest.raises(ValueError):
+            rdp_cert.thumbprint(bad)
+
+
+def test_gateway_login_is_the_desktops_unless_the_site_says_otherwise():
+    from services.rdp_ws import guacd_params
+
+    profile = {"username": "CORP\\pam", "password": "desk-pw", "gateway_password": "gw-pw",
+               "options": json.dumps({"gateway_host": "rdgw.example.com"})}
+    params = guacd_params(profile, "desk", 3389)
+    assert params["gateway-hostname"] == "rdgw.example.com" and params["gateway-port"] == "443"
+    assert (params["gateway-username"], params["gateway-domain"],
+            params["gateway-password"]) == ("pam", "CORP", "desk-pw")
+    profile["options"] = json.dumps({"gateway_host": "rdgw.example.com", "gateway_port": 8443,
+                                     "gateway_same_login": False,
+                                     "gateway_username": "EDGE\\gw-user"})
+    params = guacd_params(profile, "desk", 3389)
+    assert params["gateway-port"] == "8443"
+    assert (params["gateway-username"], params["gateway-domain"],
+            params["gateway-password"]) == ("gw-user", "EDGE", "gw-pw")
+    # No gateway, no gateway parameters.
+    assert "gateway-hostname" not in guacd_params({"username": "u"}, "desk", 3389)
+
+
+@pytest.mark.parametrize("bad,field", [
+    ({"gateway_host": "rd gw"}, "gateway_host"),
+    ({"gateway_host": "rdgw", "gateway_port": 70000}, "gateway_port"),
+    ({"gateway_host": "rdgw", "gateway_domain": "A\\B"}, "gateway_domain"),
+    ({"gateway_host": "rdgw", "desktop_thumbprint": "not-hex"}, "desktop_thumbprint"),
+])
+def test_gateway_options_are_validated(world, monkeypatch, bad, field):
+    from services.session_service import SessionService
+
+    _db, ids = world
+    monkeypatch.setenv("GANXTERM_GUACD", "guacd:4822")
+    result = svc(SessionService, ids["pam"], "power").save(
+        name="w", host="h", port=3389, session_type="rdp", options=bad)
+    assert not result["ok"] and field in result["errors"]
+
+
+def test_a_gateway_and_an_ssh_tunnel_are_refused_together(world, monkeypatch):
+    from services.session_service import SessionService
+
+    _db, ids = world
+    monkeypatch.setenv("GANXTERM_GUACD", "guacd:4822")
+    result = svc(SessionService, ids["pam"], "power").save(
+        name="w", host="h", port=3389, session_type="rdp", via_session_id=ids["pam-ssh"],
+        options={"gateway_host": "rdgw"})
+    assert not result["ok"] and "via_session_id" in result["errors"]
+
+
+def test_the_gateway_password_is_stored_encrypted_and_never_listed(world, monkeypatch):
+    from services.access import resolve_site
+    from services.session_service import SessionService
+
+    db, ids = world
+    monkeypatch.setenv("GANXTERM_GUACD", "guacd:4822")
+    pam = svc(SessionService, ids["pam"], "power")
+    site = _gateway_site(pam, 443)
+    got = pam.get(site)
+    assert got["has_gateway_password"] is True
+    assert "gw-secret-pw" not in json.dumps([got, pam.list()])
+    with db.get_db() as conn:
+        stored = conn.execute("SELECT gateway_password FROM sessions WHERE id = ?",
+                              (site,)).fetchone()[0]
+    assert stored and "gw-secret-pw" not in stored
+    assert resolve_site(site, ids["pam"])[0]["gateway_password"] == "gw-secret-pw"
+    # Omitted keeps it; "" clears it.
+    pam.save(session_id=site, name="behind", host="desk-07.corp.local", port=3389,
+             session_type="rdp", options={"gateway_host": "127.0.0.1"})
+    assert resolve_site(site, ids["pam"])[0]["gateway_password"] == "gw-secret-pw"
+    pam.save(session_id=site, name="behind", host="desk-07.corp.local", port=3389,
+             session_type="rdp", options={"gateway_host": "127.0.0.1"}, gateway_password="")
+    assert pam.get(site)["has_gateway_password"] is False
+
+
+def test_the_gateway_pin_follows_the_gateway_and_forget_clears_it(world, monkeypatch):
+    from services.session_service import SessionService
+
+    db, ids = world
+    monkeypatch.setenv("GANXTERM_GUACD", "guacd:4822")
+    pam = svc(SessionService, ids["pam"], "power")
+    site = _gateway_site(pam, 443)
+
+    def pin(value=None):
+        with db.get_db() as conn:
+            if value is not None:
+                conn.execute("UPDATE sessions SET gateway_key = ? WHERE id = ?", (value, site))
+            return conn.execute("SELECT gateway_key FROM sessions WHERE id = ?",
+                                (site,)).fetchone()[0]
+
+    def save(**options):
+        assert pam.save(session_id=site, name="behind", host="desk-07.corp.local", port=3389,
+                        session_type="rdp", options=options)["ok"]
+
+    pin("rdp-sha256:aa")
+    save(gateway_host="127.0.0.1", gateway_port=443, performance="slow")
+    assert pin() == "rdp-sha256:aa"                     # same gateway: kept
+    assert next(r for r in pam.list() if r["id"] == site)["has_host_key"]
+    save(gateway_host="127.0.0.1", gateway_port=8443)
+    assert pin() == ""                                  # another port: re-pin
+    pin("rdp-sha256:aa")
+    save(gateway_host="rdgw2")
+    assert pin() == ""                                  # another host
+    pin("rdp-sha256:aa")
+    assert pam.clear_host_key(site)["ok"] and pin() == ""
+
+
+def test_connecting_through_a_gateway_pins_it_and_hands_guacd_the_prints(
+        world, monkeypatch, gateway):
+    from services import ssh
+    from services.access import resolve_site
+    from services.rdp_ws import _prepare
+    from services.session_service import SessionService
+
+    fake_gw, gw_pin = gateway
+    db, ids = world
+    monkeypatch.setenv("GANXTERM_GUACD", "guacd:4822")
+    pam = svc(SessionService, ids["pam"], "power")
+    site = _gateway_site(pam, fake_gw.port)
+
+    def connect():
+        fake = FakeGuacd()
+        monkeypatch.setenv("GANXTERM_GUACD", fake.address)
+        try:
+            sock, *_rest = _prepare(resolve_site(site, ids["pam"])[0], 1024, 768, 96)
+            sock.close()
+            return dict(zip(ARGS[1:], fake.connect()[1:]))
+        finally:
+            fake.close()
+
+    # Without the desktop's thumbprint: the gateway is pinned, guacd ignores
+    # the desktop's certificate (it can't be read from here).
+    sent = connect()
+    assert resolve_site(site, ids["pam"])[0]["gateway_key"] == gw_pin
+    assert sent["cert-fingerprints"] == rdp_cert.guacd_fingerprint(gw_pin)
+    assert sent["ignore-cert"] == "true"
+    assert sent["hostname"] == "desk-07.corp.local"
+    assert sent["gateway-hostname"] == "127.0.0.1" and sent["gateway-password"] == "desk-pw"
+
+    # With it: both prints, and guacd checks them.
+    thumb = "AB" * 20
+    assert pam.save(session_id=site, name="behind", host="desk-07.corp.local", port=3389,
+                    session_type="rdp",
+                    options={"gateway_host": "127.0.0.1", "gateway_port": fake_gw.port,
+                             "desktop_thumbprint": thumb})["ok"]
+    sent = connect()
+    assert sent["cert-fingerprints"] == (rdp_cert.guacd_fingerprint(gw_pin) + ","
+                                         + rdp_cert.thumbprint(thumb))
+    assert sent["ignore-cert"] == "false"
+
+    # A different gateway certificate is refused before guacd is asked.
+    with db.get_db() as conn:
+        conn.execute("UPDATE sessions SET gateway_key = ? WHERE id = ?",
+                     ("rdp-sha256:" + "00" * 32, site))
+    with pytest.raises(ssh.HostKeyChanged):
+        _prepare(resolve_site(site, ids["pam"])[0], 1024, 768, 96)
+
+
+def test_an_unreachable_gateway_is_explained(world, monkeypatch):
+    from services import guacd
+    from services.access import resolve_site
+    from services.rdp_ws import _prepare
+    from services.session_service import SessionService
+
+    _db, ids = world
+    monkeypatch.setenv("GANXTERM_GUACD", "guacd:4822")
+    pam = svc(SessionService, ids["pam"], "power")
+    closed = socket.socket()
+    closed.bind(("127.0.0.1", 0))
+    port = closed.getsockname()[1]
+    closed.close()
+    site = _gateway_site(pam, port)
+    with pytest.raises(guacd.GuacdError) as caught:
+        _prepare(resolve_site(site, ids["pam"])[0], 1024, 768, 96)
+    assert "Remote Desktop Gateway at 127.0.0.1" in caught.value.message
+
+
+def test_gateway_errors_point_at_the_gateway():
+    from services.rdp_ws import with_gateway_hint
+
+    assert "Gateway rdgw" in with_gateway_hint("The login was refused.", "769", "rdgw")
+    assert with_gateway_hint("The login was refused.", "769", "") == "The login was refused."
+    assert with_gateway_hint("The session ended.", "525", "rdgw") == "The session ended."

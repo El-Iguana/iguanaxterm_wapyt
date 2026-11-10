@@ -23,6 +23,9 @@ What it pins:
     Custom; Slow link and Best quality sites connect and draw; on a 2x screen
     "Use every pixel" gets a desktop with twice the pixels, and off (the
     default) a CSS-sized one
+  - gateway (#75): the editor shows the gateway's own login only when "same
+    login" is off, and refuses a gateway together with an SSH tunnel (no RD
+    Gateway here: tests/test_rdp_gateway_live.py covers guacd's side)
   - a refused login (NLA against xrdp) is explained
   - the tunnel: a site reachable only through the SSH target connects
   - a changed certificate is refused with the host-key message, and
@@ -322,6 +325,30 @@ with sync_playwright() as p:
     page.wait_for_timeout(300)
     check(hidden_before and shown and not depth.is_visible(),
           "colour depth and effects show only for Custom")
+    form.locator("button", has_text="Cancel").click()
+    page.wait_for_timeout(500)
+
+    # ── gateway editor (#75) ─────────────────────────────────────────────────
+    page.click('.wapyt-toolbar-btn[data-id="new"]')
+    page.wait_for_selector(".wapyt-modal-body:visible .wapyt-form-body", timeout=30000)
+    form = visible_form(page)
+    form.locator('[name="name"]').fill("gw-box")
+    form.locator('[name="session_type"]').select_option("rdp")
+    page.wait_for_timeout(300)
+    form.locator('[name="host"]').fill("desk-07.corp.local")
+    gw_user = form.locator('[name="gateway_username"]')
+    hidden_first = not gw_user.is_visible()
+    form.locator('[name="gateway_same_login"]').set_checked(False)
+    page.wait_for_timeout(300)
+    shown = gw_user.is_visible() and form.locator('[name="gateway_password"]').is_visible()
+    check(hidden_first and shown, "the gateway's own login shows only when it differs")
+    form.locator('[name="gateway_host"]').fill("rdgw.example.com")
+    form.locator('[name="via_session_id"]').select_option(label="Through SSH session “jump”")
+    form.locator(".wapyt-form-button-primary").click()
+    page.wait_for_timeout(1500)
+    body = form.inner_text()
+    check("reached through the gateway" in body, "a gateway plus an SSH tunnel is refused",
+          body[-200:])
     form.locator("button", has_text="Cancel").click()
     page.wait_for_timeout(500)
 

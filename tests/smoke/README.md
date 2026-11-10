@@ -109,8 +109,10 @@ per site), the Custom performance fields show and hide, Slow link and Best
 quality sites connect, "Use every pixel" doubles the desktop's pixels on a
 2x screen (a second browser context with `device_scale_factor=2`), a file
 uploaded in a drive site's Files tab is on the desktop's drive and one the
-desktop writes is listed and downloads (with `IX_DRIVE_DIR`), NLA against xrdp
-is explained as a refused login, the
+desktop writes is listed and downloads (with `IX_DRIVE_DIR`), a print job
+fed to the pane as guacd sends it is acknowledged step by step and downloads as
+a PDF, and a non-PDF or a site without printing is refused (xrdp can't redirect
+a printer), NLA against xrdp is explained as a refused login, the
 tunnel-only port connects through SSH and is pinned too, and a rotated
 certificate is refused until **Forget host key**. `IX_RDP_HOST`,
 `IX_RDP_SSH_HOST` and `IX_RDP_CONTAINER` point it at a target on a

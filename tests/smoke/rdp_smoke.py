@@ -29,6 +29,10 @@ What it pins:
   - drive (#76, when IX_DRIVE_DIR is set): a file uploaded in the pane's Files
     tab is on the desktop's drive; a file the desktop writes is listed and
     downloads; the desktop is still connected afterwards
+  - printing (#77): xrdp can't redirect a printer, so guacd's own print
+    instructions (file, blobs, end) are fed to the pane: it acks each step,
+    the PDF downloads under its job name, and a site without printing, or a
+    file that isn't a PDF, is refused
   - a refused login (NLA against xrdp) is explained
   - the tunnel: a site reachable only through the SSH target connects
   - a changed certificate is refused with the host-key message, and
@@ -98,7 +102,7 @@ def visible_form(page):
 
 def add_site(page, name, host, port, session_type="rdp", security=None, via=None,
              username="testuser", password="testpass", performance=None, hidpi=None,
-             drive=None):
+             drive=None, printing=None):
     page.click('.wapyt-toolbar-btn[data-id="new"]')
     page.wait_for_selector(".wapyt-modal-body:visible .wapyt-form-body", timeout=30000)
     form = visible_form(page)
@@ -120,6 +124,8 @@ def add_site(page, name, host, port, session_type="rdp", security=None, via=None
         form.locator('[name="hidpi"]').set_checked(hidpi)
     if drive is not None:
         form.locator('[name="drive"]').set_checked(drive)
+    if printing is not None:
+        form.locator('[name="printing"]').set_checked(printing)
     form.locator(".wapyt-form-button-primary").click()
     page.wait_for_selector(".wapyt-modal-body:visible .wapyt-form-body", state="hidden", timeout=30000)
     page.wait_for_timeout(600)
@@ -370,6 +376,46 @@ with sync_playwright() as p:
         lit = wait_drawn(page, pane)
         check(lit > 20, f"a {preset} preset site connects and draws", f"{lit}")
         close_pane(page, pane)
+
+    # ── print to PDF (#77) ───────────────────────────────────────────────────
+    # guacd's side, exactly: "file" announces the stream and waits for an ack,
+    # then each "blob" waits for one, then "end". Acks are read off the tunnel.
+    FEED = """([pane, index, mimetype, name, parts]) => {
+      const rdp = document.querySelector(`#pane-term-${pane} .ix-rdp`).ixRdp;
+      const acks = [];
+      const send = rdp.tunnel.sendMessage.bind(rdp.tunnel);
+      rdp.tunnel.sendMessage = (...m) => { if (m[0] === "ack") acks.push(m.slice(1).map(String)); return send(...m); };
+      const say = (op, args) => rdp.tunnel.oninstruction(op, args.map(String));
+      say("file", [index, mimetype, name]);
+      for (const part of parts) say("blob", [index, btoa(part)]);
+      say("end", [index]);
+      rdp.tunnel.sendMessage = send;
+      return acks;
+    }"""
+    add_site(page, "print-box", RDP_HOST, RDP_PORT, printing=True)
+    pane = open_desktop(page, "print-box")
+    wait_drawn(page, pane)
+    pdf = ["%PDF-1.4\n", "1 0 obj << >> endobj\n", "%%EOF\n"]
+    with page.expect_download() as download:
+        acks = page.evaluate(FEED, [pane, 901, "application/pdf", "Quarterly report", pdf])
+    saved = download.value
+    check(saved.suggested_filename == "Quarterly report.pdf", "a print job downloads as a PDF",
+          saved.suggested_filename)
+    check(open(saved.path(), "rb").read() == "".join(pdf).encode(), "with the job's bytes")
+    check(acks == [["901", "Ready", "0"]] + [["901", "OK", "0"]] * len(pdf),
+          "every step of the job is acknowledged, so guacd keeps sending", str(acks))
+    page.wait_for_timeout(500)
+    check("Printed Quarterly report.pdf" in toast_text(page), "and a toast says so")
+    acks = page.evaluate(FEED, [pane, 902, "text/plain", "x.txt", ["not a pdf"]])
+    check(acks[:1] == [["902", "Not accepted", str(0x0303)]], "a file that isn't a PDF is refused",
+          str(acks))
+    close_pane(page, pane)
+    pane = open_desktop(page, "win-box")
+    wait_drawn(page, pane)
+    acks = page.evaluate(FEED, [pane, 903, "application/pdf", "y.pdf", ["%PDF"]])
+    check(acks[:1] == [["903", "Not accepted", str(0x0303)]],
+          "a site without printing refuses print jobs", str(acks))
+    close_pane(page, pane)
 
     # ── the shared drive (#76) ───────────────────────────────────────────────
     if DRIVE_DIR:

@@ -62,6 +62,9 @@ EFFECT_KEYS = tuple(key for key, _param, _label in RDP_EFFECTS)
 # RawAudioPlayer handles in every browser with Web Audio. guacd picks one.
 AUDIO_TYPES = ("audio/L16", "audio/L8")
 
+# The printer Windows sees when a site prints to PDF (#77).
+PRINTER_NAME = "IguanaXterm PDF"
+
 
 def rdp_options(profile: dict) -> dict:
     """The site's RDP settings, with defaults for anything unset."""
@@ -95,6 +98,8 @@ def rdp_options(profile: dict) -> dict:
         "drive": bool(stored.get("drive", False)),
         "drive_upload": bool(stored.get("drive_upload", True)),
         "drive_download": bool(stored.get("drive_download", True)),
+        # Print to a PDF the browser downloads (#77); off unless asked for.
+        "printing": bool(stored.get("printing", False)),
     }
 
 
@@ -132,6 +137,10 @@ def guacd_params(profile: dict, hostname: str, port: int) -> dict:
         # IguanaXterm's Files, where the caps and one-way switches live (#76).
         "disable-download": "true",
         "disable-upload": "true",
+        # Printing (#77): guacd's Ghostscript turns the job into a PDF and
+        # streams it to the pane, which downloads it.
+        "enable-printing": "true" if options["printing"] else "",
+        "printer-name": PRINTER_NAME if options["printing"] else "",
     }
     if options["gateway_host"]:
         # The gateway's login is the desktop's unless the site says otherwise.

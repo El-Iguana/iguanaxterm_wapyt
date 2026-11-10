@@ -6,7 +6,8 @@
 //   calls:  disconnect(), focus(), sendCtrlAltDel(), sendKey(keysym),
 //           clipboardPasteFrom(text); RDP only: setMuted(bool)
 //   events: "connect", "disconnect" {clean}, "securityfailure" {reason},
-//           "clipboard" {text}
+//           "clipboard" {text}; RDP only: "printed" {filename, bytes},
+//           "printfailed" {reason}
 //
 // The relay (/ws/rdp/<id>, rdp_ws.py) does the Guacamole handshake with guacd
 // itself, so this page never sees the login: it only draws and sends input.
@@ -20,6 +21,17 @@
   const STATE_CONNECTED = 3;
   const STATE_DISCONNECTED = 5;
   const MAX_DENSITY = 3;            // beyond this the pixels cost more than they show
+  const PDF_MAX_BYTES = 100 * 1024 * 1024;   // a print job held in the tab (#77)
+  const ACK_OK = 0x0000;
+  const ACK_FORBIDDEN = 0x0303;     // Guacamole.Status.Code.CLIENT_FORBIDDEN
+  const ACK_TOO_LARGE = 0x030D;     // CLIENT_TOO_LARGE
+
+  // A print job's name as a safe download name: no path, ends in .pdf.
+  function pdfName(name) {
+    let base = String(name || "").split(/[\\/]/).pop().replace(/[\x00-\x1f<>:"|?*]/g, "_").trim();
+    if (!base || base === ".pdf") base = "document.pdf";
+    return /\.pdf$/i.test(base) ? base : base + ".pdf";
+  }
 
   // Pixels per CSS pixel to ask the desktop for (#74). Off (the default), the
   // desktop is CSS-sized and the browser stretches it on a high-DPI screen:
@@ -34,13 +46,14 @@
   }
 
   class IxRDP extends EventTarget {
-    // options: {muted, hidpi}
+    // options: {muted, hidpi, printing}
     constructor(container, url, options) {
       super();
       options = options || {};
       this.container = container;
       this.muted = !!options.muted;
       this.hidpi = !!options.hidpi;
+      this.printing = !!options.printing;
       this._closedByUs = false;
       this._reported = false;
       this._refusal = "";
@@ -48,6 +61,7 @@
       const tunnel = new Guacamole.WebSocketTunnel(url);
       const client = new Guacamole.Client(tunnel);
       this.client = client;
+      this.tunnel = tunnel;             // for tests and the console
 
       const display = client.getDisplay();
       const element = display.getElement();
@@ -156,12 +170,58 @@
         };
       };
 
+      // Printing (#77): guacd turns a Windows print job into a PDF and sends
+      // it as a file stream, waiting for an ack after the announcement and
+      // after every chunk. Nothing else may arrive as a file: the drive's own
+      // channel is shut, so anything that isn't a PDF from a printing site is
+      // refused.
+      client.onfile = (stream, mimetype, filename) => this._receivePrint(stream, mimetype, filename);
+
       const rect = container.getBoundingClientRect();
       const scale = density(this.hidpi);
       const width = Math.max(320, Math.round((rect.width || 1024) * scale));
       const height = Math.max(240, Math.round((rect.height || 768) * scale));
       this._lastSize = [width, height];
       client.connect(`w=${width}&h=${height}&dpi=96`);
+    }
+
+    _receivePrint(stream, mimetype, filename) {
+      if (!this.printing || mimetype !== "application/pdf") {
+        stream.sendAck("Not accepted", ACK_FORBIDDEN);
+        return;
+      }
+      const name = pdfName(filename);
+      const chunks = [];
+      let bytes = 0;
+      stream.onblob = (data) => {
+        const raw = atob(data);
+        bytes += raw.length;
+        if (bytes > PDF_MAX_BYTES) {
+          stream.onblob = null;
+          stream.onend = null;
+          stream.sendAck("Too large", ACK_TOO_LARGE);
+          this.dispatchEvent(new CustomEvent("printfailed", { detail: {
+            reason: `${name} is larger than ${PDF_MAX_BYTES / (1024 * 1024)} MiB, so it wasn't downloaded.` } }));
+          return;
+        }
+        const chunk = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) chunk[i] = raw.charCodeAt(i);
+        chunks.push(chunk);
+        stream.sendAck("OK", ACK_OK);
+      };
+      stream.onend = () => {
+        const url = URL.createObjectURL(new Blob(chunks, { type: "application/pdf" }));
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = name;
+        link.style.display = "none";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+        this.dispatchEvent(new CustomEvent("printed", { detail: { filename: name, bytes } }));
+      };
+      stream.sendAck("Ready", ACK_OK);
     }
 
     _finish() {

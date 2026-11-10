@@ -199,7 +199,7 @@ def test_the_pool_opens_the_drive_for_rdp(world, drives):
     site = _rdp_site(pam, drive=True, drive_download=False)
     client = _dial(resolve_site(site, ids["pam"])[0], site, ids["pam"])
     assert isinstance(client, DriveFiles) and client.can_download is False
-    assert client.base.endswith(f"/{ids['pam']}/{site}")
+    assert client.base.endswith(os.sep + os.path.join(str(ids["pam"]), str(site)))
     no_drive = _rdp_site(pam)
     with pytest.raises(PermissionError):
         _dial(resolve_site(no_drive, ids["pam"])[0], no_drive, ids["pam"])

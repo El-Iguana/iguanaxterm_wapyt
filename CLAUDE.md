@@ -83,7 +83,7 @@ or a `podman run` recipe (Podman on Linux) to save folders to a host folder.
 ### How the image is built (2026-09-26)
 
 Same design as Monguana's: the `Containerfile` builds from a plain clone — a
-stage clones wapyt at the pinned `WAPYT_REF` and builds both wheels (0.1.0 for
+stage clones wapyt at the pinned `WAPYT_REF` and builds both wheels (its real version for
 the server, 99.99.99 with a regenerated manifest for the browser). Before
 this a fresh clone could not be built: both wheels were git-ignored and the
 README asked for a manual `uv build` into `vendor-wheels/`.

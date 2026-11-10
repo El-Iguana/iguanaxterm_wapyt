@@ -39,11 +39,11 @@ services:
       PORT: ${GANXTERM_PORT:-8765}
       GANXTERM_CANONICAL_ORIGIN: ${GANXTERM_CANONICAL_ORIGIN:-http://127.0.0.1:${GANXTERM_PORT:-8765}}
       GANXTERM_ALLOWED_HOSTS: ${GANXTERM_ALLOWED_HOSTS:-}
+      GANXTERM_DRIVE_DIR: /drives
       GANXTERM_GUACD: ${GANXTERM_GUACD:-127.0.0.1:4822}
-    depends_on:
-      - guacd
     volumes:
       - iguanaxterm-data:/data
+      - iguanaxterm-drives:/drives
     healthcheck:
       test: ["CMD", "python", "manage.py", "health"]
       interval: 30s
@@ -60,7 +60,22 @@ services:
     network_mode: host
     # Loopback only (see the top of this file).
     entrypoint: ["/opt/guacamole/sbin/guacd", "-f", "-b", "127.0.0.1", "-l", "4822", "-L", "info"]
+    # RDP shared drives (#76): guacd writes them as the app's own uid, so
+    # either side can change what the other wrote. HOME: FreeRDP wants a
+    # writable one, and / isn't for this uid.
+    user: "10001:999"
+    environment:
+      HOME: /tmp
+    volumes:
+      - iguanaxterm-drives:/drives
+    # After the app, so the shared volume is created from the app image's
+    # /drives, owned by uid 10001, not root.
+    depends_on:
+      - iguanaxterm
 
 volumes:
   iguanaxterm-data:
     name: iguanaxterm-data
+  iguanaxterm-drives:
+    # RDP shared drives (#76), shared by the app and guacd.
+    name: iguanaxterm-drives

@@ -16,6 +16,10 @@
 # it with `/play-noise.sh` (pacat). xrdp has no NLA
 # (CredSSP), so security=nla is refused: that is the "login refused" case.
 #
+# A redirected drive (#76) is mounted by xrdp-chansrv with FUSE at
+# ~testuser/thinclient_drives/GUACFS, so run it with
+# --device /dev/fuse --cap-add SYS_ADMIN for the drive checks.
+#
 # /rotate-cert.sh replaces xrdp's certificate and restarts it, for the
 # "certificate changed" test.
 FROM docker.io/library/debian:trixie-slim
@@ -26,6 +30,7 @@ RUN apt-get update \
         xrdp xorgxrdp xfce4 xfce4-terminal dbus-x11 xclip socat openssh-server \
         openssl ssl-cert procps fonts-dejavu-core \
         pipewire pipewire-pulse wireplumber pipewire-module-xrdp pulseaudio-utils \
+        fuse3 \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
     && useradd -m -s /bin/bash testuser \
     && echo 'testuser:testpass' | chpasswd \

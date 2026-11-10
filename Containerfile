@@ -75,8 +75,12 @@ COPY --from=wapyt-wheels /wheels/browser/wapyt-99.99.99-py3-none-any.whl appcode
 # folders saved on the server (/data/downloads) unless a host folder is mounted
 # at /downloads. Keep it on a named volume: losing secret.key loses every
 # stored credential.
-RUN mkdir -p /data
+RUN mkdir -p /data /drives
 VOLUME /data
+
+# RDP shared drives (#76), a volume shared with guacd (compose mounts it and
+# sets GANXTERM_DRIVE_DIR). Made here, owned by the app's user, so a new
+# volume mounted here first takes that owner; guacd runs as the same uid.
 
 EXPOSE 8765
 
@@ -88,7 +92,8 @@ ENV GANXTERM_DATA_DIR=/data \
     PORT=8765
 
 # Never run the app as root: it holds every user's SSH credentials.
-RUN useradd --system --uid 10001 --home /app iguana && chown -R iguana /app /data
+RUN useradd --system --uid 10001 --home /app iguana && chown -R iguana /app /data \
+    && chown 10001:999 /drives && chmod 0770 /drives
 USER iguana
 
 CMD ["python", "service.py"]

@@ -257,9 +257,13 @@ class UserService:
         from services.live import recheck
         from services.pool import sftp_pool, transfer_pool
 
+        from services import drive
+
         for session_id in session_ids:
             sftp_pool.close(session_id)
             transfer_pool.close(session_id)
+            drive.remove_site(session_id)         # RDP drive folders (#76)
+        drive.remove_user(target)
         # Their own open terminals and anything on their sites (#41).
         recheck()
         return {"ok": True}

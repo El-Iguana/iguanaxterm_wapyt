@@ -30,7 +30,7 @@ from pytincture.dataclass import backend_for_frontend, bff_policy
 from services.auth import current_user_id
 from services.db import current_role, encrypt, get_db
 from services.roles import ADMIN, POWER, at_least
-from services import guacd, rdp_cert
+from services import drive, guacd, rdp_cert
 from services.paths import (
     RDP_COLOR_DEPTHS, RDP_EFFECTS, RDP_KEYBOARDS, RDP_PERFORMANCE, RDP_PRESETS, RDP_RESIZE,
     RDP_SECURITY,
@@ -125,6 +125,10 @@ def clean_rdp_options(options: Any) -> tuple[dict, dict]:
         "gateway_same_login": bool(given.get("gateway_same_login", True)),
         "gateway_username": str(given.get("gateway_username") or "").strip()[:255],
         "desktop_thumbprint": desktop_thumbprint,
+        # The shared drive (#76).
+        "drive": bool(given.get("drive", False)),
+        "drive_upload": bool(given.get("drive_upload", True)),
+        "drive_download": bool(given.get("drive_download", True)),
     }, errors
 
 
@@ -140,8 +144,11 @@ class SessionService:
     # ------------------------------------------------------------------
 
     def features(self) -> dict:
-        """What this server can connect to: RDP only where guacd is set up (#55)."""
-        return {"rdp": guacd.enabled()}
+        """
+        What this server can connect to: RDP only where guacd is set up (#55),
+        and RDP drives only where they have a folder too (#76).
+        """
+        return {"rdp": guacd.enabled(), "rdp_drive": drive.enabled()}
 
     def list(self) -> list:
         """
@@ -198,7 +205,7 @@ class SessionService:
                 "options": _parse_options(row["options"]),
                 "editable": editable,
                 "can_forget": editable,
-                "files": bool(session_caps(row["type"])["files"]),
+                "files": drive.has_files(row["type"], _parse_options(row["options"])),
                 "shared": False,
             }
             for row in rows
@@ -221,7 +228,8 @@ class SessionService:
                 "editable": False,
                 # Only the owner or an Admin clears a shared site's pin.
                 "can_forget": role == ADMIN,
-                "files": bool(row["allow_files"]) and bool(session_caps(row["type"])["files"]),
+                "files": bool(row["allow_files"])
+                and drive.has_files(row["type"], _parse_options(row["options"])),
                 "shared": True,
                 "list_name": row["list_name"],
                 "owner": row["owner"],
@@ -450,6 +458,7 @@ class SessionService:
 
         sftp_pool.close(int(session_id))
         transfer_pool.close(int(session_id))
+        drive.remove_site(int(session_id))        # everyone's drive folder (#76)
         # Anyone it was shared with loses their open terminal or desktop too.
         from services.live import recheck
 

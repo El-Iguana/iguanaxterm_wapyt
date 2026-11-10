@@ -26,6 +26,9 @@ What it pins:
   - gateway (#75): the editor shows the gateway's own login only when "same
     login" is off, and refuses a gateway together with an SSH tunnel (no RD
     Gateway here: tests/test_rdp_gateway_live.py covers guacd's side)
+  - drive (#76, when IX_DRIVE_DIR is set): a file uploaded in the pane's Files
+    tab is on the desktop's drive; a file the desktop writes is listed and
+    downloads; the desktop is still connected afterwards
   - a refused login (NLA against xrdp) is explained
   - the tunnel: a site reachable only through the SSH target connects
   - a changed certificate is refused with the host-key message, and
@@ -53,6 +56,10 @@ RDP_HOST = os.environ.get("IX_RDP_HOST", "127.0.0.1")
 RDP_PORT = os.environ.get("IX_RDP_PORT", "3389")
 SSH_HOST = os.environ.get("IX_RDP_SSH_HOST", "127.0.0.1")
 SSH_PORT = os.environ.get("IX_RDP_SSH_PORT", "2224")
+# The app's GANXTERM_DRIVE_DIR (#76); the drive checks run only with it. xrdp
+# mounts a redirected drive with FUSE as ~/thinclient_drives/GUACFS, so the
+# target needs --device /dev/fuse --cap-add SYS_ADMIN.
+DRIVE_DIR = os.environ.get("IX_DRIVE_DIR", "")
 
 results = []
 
@@ -90,7 +97,8 @@ def visible_form(page):
 
 
 def add_site(page, name, host, port, session_type="rdp", security=None, via=None,
-             username="testuser", password="testpass", performance=None, hidpi=None):
+             username="testuser", password="testpass", performance=None, hidpi=None,
+             drive=None):
     page.click('.wapyt-toolbar-btn[data-id="new"]')
     page.wait_for_selector(".wapyt-modal-body:visible .wapyt-form-body", timeout=30000)
     form = visible_form(page)
@@ -110,6 +118,8 @@ def add_site(page, name, host, port, session_type="rdp", security=None, via=None
         form.locator('[name="performance"]').select_option(performance)
     if hidpi is not None:
         form.locator('[name="hidpi"]').set_checked(hidpi)
+    if drive is not None:
+        form.locator('[name="drive"]').set_checked(drive)
     form.locator(".wapyt-form-button-primary").click()
     page.wait_for_selector(".wapyt-modal-body:visible .wapyt-form-body", state="hidden", timeout=30000)
     page.wait_for_timeout(600)
@@ -161,6 +171,8 @@ with sync_playwright() as p:
     context = browser.new_context(viewport={"width": 1400, "height": 900},
                                   permissions=["clipboard-read", "clipboard-write"])
     record_toasts(context)
+    # Chromium's native open picker can't be driven; the <input> path can (#76).
+    context.add_init_script("window.showOpenFilePicker = undefined;")
     page = context.new_page()
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
@@ -358,6 +370,41 @@ with sync_playwright() as p:
         lit = wait_drawn(page, pane)
         check(lit > 20, f"a {preset} preset site connects and draws", f"{lit}")
         close_pane(page, pane)
+
+    # ── the shared drive (#76) ───────────────────────────────────────────────
+    if DRIVE_DIR:
+        add_site(page, "drive-box", RDP_HOST, RDP_PORT, drive=True)
+        pane = open_desktop(page, "drive-box")
+        check(wait_drawn(page, pane) > 20, "a site with a drive connects and draws")
+        page.wait_for_timeout(2000)                      # xrdp mounts the drive
+        page.click(f'.ix-pane-tab[data-pane="{pane}"][data-pane-tab="files"]')
+        files = f"#pane-files-{pane}"
+        page.wait_for_selector(f"{files} .wapyt-datatable", timeout=30000)
+        payload = f"to the desktop {int(time.time())}"
+        with page.expect_file_chooser() as chooser:
+            page.click(f'{files} .ix-sftp-btn[data-sftp="upload"]')
+        chooser.value.set_files({"name": "to-desktop.txt", "mimeType": "text/plain",
+                                 "buffer": payload.encode()})
+        page.wait_for_timeout(3000)
+        there = target("cat ~/thinclient_drives/GUACFS/to-desktop.txt")
+        check(there == payload, "a file uploaded in Files is on the desktop's drive", there)
+        target("echo from the desktop > ~/thinclient_drives/GUACFS/from-desktop.txt")
+        page.wait_for_timeout(1000)
+        page.click(f'{files} .ix-sftp-btn[data-sftp="refresh"]')
+        page.wait_for_timeout(1500)
+        names = page.locator(f"{files} .wapyt-datatable-table tbody tr").all_inner_texts()
+        check(any("from-desktop.txt" in n for n in names),
+              "a file the desktop writes is listed in Files", str(names)[:200])
+        got = page.evaluate(
+            "id => fetch(`/files/${id}/download?path=/from-desktop.txt`).then(r => r.text())",
+            site_id("drive-box"))
+        check(got.strip() == "from the desktop", "and it downloads", got[:80])
+        page.click(f'.ix-pane-tab[data-pane="{pane}"][data-pane-tab="terminal"]')
+        page.wait_for_timeout(1500)
+        check(wait_drawn(page, pane, 5) > 20, "the desktop is still connected after Files")
+        close_pane(page, pane)
+    else:
+        print("SKIP: drive checks (set IX_DRIVE_DIR to the app's GANXTERM_DRIVE_DIR)")
 
     real = [e for e in errors if "WebSocket" not in e]
     check(not real, "no console errors", "; ".join(real)[:400])

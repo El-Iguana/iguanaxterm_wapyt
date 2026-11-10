@@ -187,6 +187,14 @@ Guacamole's `guacd`, which does the work for RDP (Windows) desktops.
 > started bound to `127.0.0.1`. Don't add a `ports:` entry for it, or bind it
 > to anything else. Without guacd (or with `GANXTERM_GUACD` empty), RDP is
 > simply not offered; everything else works.
+
+RDP sites can also have a **shared drive**: a folder that Windows
+sees as a drive, and that the site's Files tab shows here. The drives live
+on a third volume, `iguanaxterm-drives`, mounted in both containers. guacd
+runs as the app's own user (`10001:999`), so either side can change what the
+other wrote, and it starts after the app, so the new volume takes the app
+image's owner instead of root. Without `GANXTERM_DRIVE_DIR` the option is
+hidden.
 Watch it come up:
 
 ```sh
@@ -299,8 +307,12 @@ mkdir -p ~/Downloads/IguanaXterm
 podman build -f Containerfile -t localhost/iguanaxterm:latest .
 # guacd, for RDP desktops: on a private network, never published (section 4)
 podman network create iguanaxterm 2>/dev/null || true
+# guacd runs as the app's user, mapped to you the same way, so RDP shared
+# drives (iguanaxterm-drives) belong to both
 podman run -d --name iguanaxterm-guacd --network iguanaxterm \
   --restart unless-stopped --label app=IguanaXterm \
+  --userns=keep-id:uid=10001,gid=999 --user 10001:999 -e HOME=/tmp \
+  -v iguanaxterm-drives:/drives:U \
   docker.io/guacamole/guacd:1.6.0@sha256:8974eaa9ba32f713daf311e7cc8cd7e4cdfba1edea39eed75524e78ef4b08f4f
 podman run -d --name iguanaxterm --hostname iguanaxterm --label app=IguanaXterm \
   --restart unless-stopped \
@@ -308,10 +320,12 @@ podman run -d --name iguanaxterm --hostname iguanaxterm --label app=IguanaXterm 
   -p 127.0.0.1:8765:8765 \
   --env-file .env \
   -e GANXTERM_GUACD=iguanaxterm-guacd:4822 \
+  -e GANXTERM_DRIVE_DIR=/drives \
   --userns=keep-id:uid=10001,gid=999 \
   -e GANXTERM_DOWNLOAD_DIR=/downloads \
   -e GANXTERM_DOWNLOAD_HOST_DIR='~/Downloads/IguanaXterm' \
   -v iguanaxterm-data:/data:U \
+  -v iguanaxterm-drives:/drives:U \
   -v ~/Downloads/IguanaXterm:/downloads:z \
   localhost/iguanaxterm:latest
 ```
@@ -477,7 +491,15 @@ docker run -d --name iguanaxterm --hostname iguanaxterm --label app=IguanaXterm 
   ```
 
   and add `--network iguanaxterm -e GANXTERM_GUACD=iguanaxterm-guacd:4822` to
-  the `docker run` above. With host networking, bind guacd to loopback
+  the `docker run` above.
+
+  For **RDP shared drives**, add `-v iguanaxterm-drives:/drives -e
+  GANXTERM_DRIVE_DIR=/drives` to the app's `docker run`, and `--user
+  10001:999 -e HOME=/tmp -v iguanaxterm-drives:/drives` to guacd's. Start
+  guacd **after** the app the first time, so the new volume takes the app
+  image's owner (uid 10001) instead of root.
+
+  With host networking, bind guacd to loopback
   yourself (its image defaults to `0.0.0.0`):
   `docker run -d --name iguanaxterm-guacd --network host --entrypoint /opt/guacamole/sbin/guacd docker.io/guacamole/guacd:1.6.0@sha256:8974eaa9ba32f713daf311e7cc8cd7e4cdfba1edea39eed75524e78ef4b08f4f -f -b 127.0.0.1 -l 4822`
   and `-e GANXTERM_GUACD=127.0.0.1:4822`.

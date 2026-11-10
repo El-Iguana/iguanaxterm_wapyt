@@ -30,7 +30,7 @@ from pytincture.dataclass import backend_for_frontend, bff_policy
 from services.auth import current_user_id
 from services.db import current_role, encrypt, get_db
 from services.roles import ADMIN, POWER, at_least
-from services import guacd
+from services import guacd, rdp_cert
 from services.paths import (
     RDP_COLOR_DEPTHS, RDP_EFFECTS, RDP_KEYBOARDS, RDP_PERFORMANCE, RDP_PRESETS, RDP_RESIZE,
     RDP_SECURITY,
@@ -84,6 +84,26 @@ def clean_rdp_options(options: Any) -> tuple[dict, dict]:
     color_depth = str(given.get("color_depth") or "")
     if color_depth not in {key for key, _label in RDP_COLOR_DEPTHS}:
         errors["color_depth"] = "Unknown colour depth"
+    # The gateway (#75). Its password is a column, never an option.
+    gateway_host = str(given.get("gateway_host") or "").strip()
+    if len(gateway_host) > 255 or any(c in gateway_host for c in "/\\@ \t"):
+        errors["gateway_host"] = "A host name or address, like rdgw.example.com"
+    try:
+        gateway_port = int(given.get("gateway_port") or 443)
+        if not 1 <= gateway_port <= 65535:
+            raise ValueError
+    except (TypeError, ValueError):
+        gateway_port = 443
+        errors["gateway_port"] = "A port from 1 to 65535"
+    gateway_domain = str(given.get("gateway_domain") or "").strip()
+    if len(gateway_domain) > 255 or any(c in gateway_domain for c in "\\/@ \t"):
+        errors["gateway_domain"] = "A domain name, like CORP (no slashes, @ or spaces)"
+    try:
+        desktop_thumbprint = rdp_cert.thumbprint(given.get("desktop_thumbprint"))
+    except ValueError:
+        desktop_thumbprint = ""
+        errors["desktop_thumbprint"] = ("The certificate's SHA-1 Thumbprint, as Windows shows "
+                                        "it (40 hex digits), or a SHA-256 one (64)")
     # Custom's own values are kept whatever the preset, so switching to a
     # preset and back doesn't lose them (#74).
     effects = {key: bool(given.get(key, RDP_PRESETS["balanced"][key]))
@@ -99,6 +119,12 @@ def clean_rdp_options(options: Any) -> tuple[dict, dict]:
         "color_depth": color_depth,
         **effects,
         "hidpi": bool(given.get("hidpi", False)),    # every physical pixel (#74)
+        "gateway_host": gateway_host,
+        "gateway_port": gateway_port,
+        "gateway_domain": gateway_domain,
+        "gateway_same_login": bool(given.get("gateway_same_login", True)),
+        "gateway_username": str(given.get("gateway_username") or "").strip()[:255],
+        "desktop_thumbprint": desktop_thumbprint,
     }, errors
 
 
@@ -137,7 +163,7 @@ class SessionService:
                 "  (password <> '') AS has_password, "
                 "  (private_key <> '') AS has_private_key, "
                 "  (passphrase <> '') AS has_passphrase, "
-                "  (host_key <> '') AS has_host_key "
+                "  (host_key <> '' OR gateway_key <> '') AS has_host_key "
                 "FROM sessions WHERE user_id = ? "
                 "ORDER BY folder COLLATE NOCASE, name COLLATE NOCASE",
                 (self._user_id,),
@@ -148,7 +174,7 @@ class SessionService:
             shared = conn.execute(
                 "SELECT s.id, s.user_id, s.name, s.folder, s.type, s.host, s.port, "
                 "       s.username, s.description, s.created_at, s.options, "
-                "       (s.host_key <> '') AS has_host_key, "
+                "       (s.host_key <> '' OR s.gateway_key <> '') AS has_host_key, "
                 "       MIN(l.name COLLATE NOCASE) AS list_name, "
                 "       MAX(l.allow_files) AS allow_files, "
                 "       o.username AS owner "
@@ -213,7 +239,8 @@ class SessionService:
                 f"SELECT {_PUBLIC_COLUMNS}, "
                 "  (password <> '') AS has_password, "
                 "  (private_key <> '') AS has_private_key, "
-                "  (passphrase <> '') AS has_passphrase "
+                "  (passphrase <> '') AS has_passphrase, "
+                "  (gateway_password <> '') AS has_gateway_password "
                 "FROM sessions WHERE id = ? AND user_id = ?",
                 (int(session_id), self._user_id),
             ).fetchone()
@@ -225,6 +252,7 @@ class SessionService:
             "has_password": bool(row["has_password"]),
             "has_private_key": bool(row["has_private_key"]),
             "has_passphrase": bool(row["has_passphrase"]),
+            "has_gateway_password": bool(row["has_gateway_password"]),
         }
 
     def folders(self) -> list:
@@ -264,11 +292,13 @@ class SessionService:
         via_session_id: Optional[int] = 0,
         passphrase: str = _SENTINEL_UNCHANGED,
         options: Any = None,
+        gateway_password: str = _SENTINEL_UNCHANGED,
     ) -> dict:
         """
         Create or update a profile.
 
-        ``password``, ``private_key`` and ``passphrase`` are three-state:
+        ``password``, ``private_key``, ``passphrase`` and
+        ``gateway_password`` (an RDP site's gateway, #75) are three-state:
         omitted leaves the stored value alone, ``""`` clears it, anything else
         replaces it. A key that is replaced or cleared takes its passphrase
         with it, unless a new one comes in the same call.
@@ -287,6 +317,13 @@ class SessionService:
                     "session_type": "RDP isn't set up on this server (no guacd)"}}
             stored_options, option_errors = clean_rdp_options(options)
             errors.update(option_errors)
+            # The gateway is how the desktop is reached: a tunnel would be a
+            # second, contradictory route (#75).
+            if stored_options["gateway_host"] and int(via_session_id or 0):
+                errors["via_session_id"] = ("A desktop behind a Remote Desktop Gateway is "
+                                            "reached through the gateway; choose Directly")
+        else:
+            gateway_password = ""        # only RDP has a gateway
         if errors:
             return {"ok": False, "errors": errors}
 
@@ -339,6 +376,19 @@ class SessionService:
                 if passphrase != _SENTINEL_UNCHANGED:
                     assignments.append("passphrase = ?")
                     values.append(encrypt(passphrase))
+                if gateway_password != _SENTINEL_UNCHANGED:
+                    assignments.append("gateway_password = ?")
+                    values.append(encrypt(gateway_password))
+                # The gateway's pin goes with the gateway: another host or
+                # port, or none, re-pins (#75). Compared against the old row.
+                assignments.append(
+                    "gateway_key = CASE WHEN type = 'rdp' AND ? = 'rdp' "
+                    "AND COALESCE(json_extract(options, '$.gateway_host'), '') = ? "
+                    "AND COALESCE(json_extract(options, '$.gateway_port'), 443) = ? "
+                    "THEN gateway_key ELSE '' END"
+                )
+                values.extend([session_type, stored_options.get("gateway_host", ""),
+                               int(stored_options.get("gateway_port") or 443)])
                 # Host, port or type changed means the pin belongs to a different
                 # endpoint (or protocol: an SSH key is no RDP certificate); drop
                 # it so the next connect re-pins.
@@ -366,14 +416,17 @@ class SessionService:
                 cursor = conn.execute(
                     "INSERT INTO sessions "
                     "(user_id, name, host, port, username, type, folder, description, "
-                    " via_session_id, options, password, private_key, passphrase) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " via_session_id, options, password, private_key, passphrase, "
+                    " gateway_password) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         self._user_id, name, host, port, username, session_type,
                         folder, description, via, json.dumps(stored_options),
                         encrypt("" if password == _SENTINEL_UNCHANGED else password),
                         encrypt("" if private_key == _SENTINEL_UNCHANGED else private_key),
                         encrypt("" if passphrase == _SENTINEL_UNCHANGED else passphrase),
+                        encrypt("" if gateway_password == _SENTINEL_UNCHANGED
+                                else gateway_password),
                     ),
                 )
                 new_id = cursor.lastrowid
@@ -420,11 +473,13 @@ class SessionService:
             # who uses it (#38).
             if current_role(conn, self._user_id) == ADMIN:
                 cursor = conn.execute(
-                    "UPDATE sessions SET host_key = '' WHERE id = ?", (int(session_id),)
+                    "UPDATE sessions SET host_key = '', gateway_key = '' WHERE id = ?",
+                    (int(session_id),)
                 )
             else:
                 cursor = conn.execute(
-                    "UPDATE sessions SET host_key = '' WHERE id = ? AND user_id = ?",
+                    "UPDATE sessions SET host_key = '', gateway_key = '' "
+                    "WHERE id = ? AND user_id = ?",
                     (int(session_id), self._user_id),
                 )
         if cursor.rowcount == 0:

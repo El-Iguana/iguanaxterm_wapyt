@@ -3002,6 +3002,34 @@ class IguanaXterm(MainWindow):
                                      "size on a 2x screen). Raise the display scaling inside "
                                      "Windows to make it bigger again. Off: normal size, a "
                                      "little soft."),
+                    # Remote Desktop Gateway (#75). Empty host: none.
+                    FieldConfig(id="gateway_host", label="Remote Desktop Gateway",
+                                value=rdp.get("gateway_host", ""), placeholder="None",
+                                help="For a desktop behind a gateway, e.g. rdgw.example.com. "
+                                     "Host above is then the desktop as the gateway sees it."),
+                    FieldConfig(id="gateway_port", label="Gateway port", type="number",
+                                value=rdp.get("gateway_port", 443), min=1, max=65535),
+                    FieldConfig(id="gateway_same_login", label="Gateway uses the same login",
+                                type="checkbox", span=2,
+                                value=bool(rdp.get("gateway_same_login", True))),
+                    FieldConfig(id="gateway_username", label="Gateway username",
+                                value=rdp.get("gateway_username", ""), autocomplete="off",
+                                help="user, DOMAIN\\user or user@domain."),
+                    FieldConfig(id="gateway_domain", label="Gateway domain",
+                                value=rdp.get("gateway_domain", ""), placeholder="Optional"),
+                    FieldConfig(id="gateway_password", label="Gateway password",
+                                type="password", span=2, autocomplete="new-password",
+                                help="Leave blank to keep the stored value."
+                                if existing.get("has_gateway_password") else None,
+                                placeholder="••••••" if existing.get("has_gateway_password")
+                                else ""),
+                    FieldConfig(id="desktop_thumbprint", label="Desktop certificate thumbprint",
+                                value=rdp.get("desktop_thumbprint", ""), span=2,
+                                placeholder="Optional",
+                                help="Behind a gateway IguanaXterm can't check the desktop's "
+                                     "certificate itself. Paste its Thumbprint (Windows: "
+                                     "certificate → Details) to have it checked; without it, "
+                                     "only the gateway's certificate is."),
                     FieldConfig(id="description", label="Description",
                                 value=existing.get("description", ""), span=2),
                 ],
@@ -3012,6 +3040,9 @@ class IguanaXterm(MainWindow):
         def _on_type_change(payload: dict) -> None:
             if payload.get("id") == "performance":
                 _apply_performance("rdp", payload.get("value"))
+                return
+            if payload.get("id") == "gateway_same_login":
+                _apply_gateway("rdp", payload.get("value"))
                 return
             if payload.get("id") != "session_type":
                 return
@@ -3034,7 +3065,18 @@ class IguanaXterm(MainWindow):
                     form.show_field(field)
                 else:
                     form.hide_field(field)
-            _apply_performance(session_type, form.get_values().get("performance"))
+            current = form.get_values()
+            _apply_performance(session_type, current.get("performance"))
+            _apply_gateway(session_type, current.get("gateway_same_login"))
+
+        def _apply_gateway(session_type: str, same_login) -> None:
+            """The gateway's own login only when it differs (#75)."""
+            own = session_type == "rdp" and not same_login
+            for field in _RDP_GATEWAY_LOGIN_FIELDS:
+                if own:
+                    form.show_field(field)
+                else:
+                    form.hide_field(field)
 
         def _apply_performance(session_type: str, performance) -> None:
             """Colour depth and the effects show only for Custom (#74)."""
@@ -3079,7 +3121,18 @@ class IguanaXterm(MainWindow):
                         "color_depth": values.get("color_depth") or "",
                         **{key: bool(values.get(key)) for key, _param, _label in RDP_EFFECTS},
                         "hidpi": bool(values.get("hidpi")),
+                        "gateway_host": (values.get("gateway_host") or "").strip(),
+                        "gateway_port": int(values.get("gateway_port") or 443),
+                        "gateway_same_login": bool(values.get("gateway_same_login")),
+                        "gateway_username": values.get("gateway_username") or "",
+                        "gateway_domain": values.get("gateway_domain") or "",
+                        "desktop_thumbprint": values.get("desktop_thumbprint") or "",
                     }
+                    # Three-state like the site password: blank keeps it.
+                    if values.get("gateway_password"):
+                        payload["gateway_password"] = values["gateway_password"]
+                    elif not existing.get("has_gateway_password"):
+                        payload["gateway_password"] = ""
                 # An empty secret field means "unchanged" when one is stored,
                 # and the service's sentinel default expresses that by omission.
                 if values.get("password"):
@@ -3905,7 +3958,10 @@ _SFTP_CSS = """
 
 # The session editor's RDP-only fields (#56), shown for RDP sites alone.
 _RDP_FIELDS = ("domain", "security", "resize", "keyboard", "console", "audio",
-               "performance", "hidpi")
+               "performance", "hidpi", "gateway_host", "gateway_port", "gateway_same_login",
+               "desktop_thumbprint")
+# Shown only when the gateway's login differs from the desktop's (#75).
+_RDP_GATEWAY_LOGIN_FIELDS = ("gateway_username", "gateway_domain", "gateway_password")
 # Shown only when Performance is Custom (#74).
 _RDP_CUSTOM_FIELDS = ("color_depth", *(key for key, _param, _label in RDP_EFFECTS))
 

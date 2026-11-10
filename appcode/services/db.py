@@ -181,6 +181,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- Per-protocol settings as JSON (RDP's domain, security, ..., #56), so a
     -- new protocol doesn't add columns. Never holds a secret.
     options     TEXT    NOT NULL DEFAULT '{}',
+    -- An RDP site's Remote Desktop Gateway (#75): its password, encrypted
+    -- like the site's, and its certificate pin (rdp-sha256:), as host_key.
+    gateway_password TEXT NOT NULL DEFAULT '',
+    gateway_key TEXT    NOT NULL DEFAULT '',
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -249,6 +253,9 @@ def init_db() -> None:
             ("passphrase", "TEXT NOT NULL DEFAULT ''"),
             # Per-protocol settings, JSON (2.4.0, RDP).
             ("options", "TEXT NOT NULL DEFAULT '{}'"),
+            # An RDP site's gateway password (encrypted) and certificate pin (#75).
+            ("gateway_password", "TEXT NOT NULL DEFAULT ''"),
+            ("gateway_key", "TEXT NOT NULL DEFAULT ''"),
         ):
             if column not in existing:
                 conn.execute(f"ALTER TABLE sessions ADD COLUMN {column} {definition}")

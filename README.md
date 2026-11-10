@@ -84,7 +84,8 @@ connect or fail, so it never makes the burst that restoring avoids.
   Guacamole's guacd, the FreeRDP-based proxy, in a private sidecar container.
   NLA, TLS and RDP security; the login stays on the server; the remote screen
   follows the pane; clipboard both ways; the desktop's sound, with a Mute
-  button; performance presets for fast or slow links; Ctrl+Alt+Del, Windows key and fullscreen buttons; tunnels through SSH like VNC; and each server's
+  button; performance presets for fast or slow links; desktops behind a
+  Remote Desktop Gateway; Ctrl+Alt+Del, Windows key and fullscreen buttons; tunnels through SSH like VNC; and each server's
   certificate is **pinned on first use** like an SSH host key, with guacd told
   to accept exactly that certificate
 - **VNC in a pane** — a remote desktop tiles, maximizes and restores like any

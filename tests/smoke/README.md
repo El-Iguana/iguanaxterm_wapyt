@@ -111,6 +111,12 @@ containers on one network, the target reachable only by name).
 The same target drives `tests/test_rdp_live.py` (the relay with no browser),
 which skips unless `IX_GUACD` and `IX_RDP` are set.
 
+There's no RD Gateway here. `tests/test_rdp_gateway_live.py` (needs only
+`IX_GUACD`, guacd on the host network) puts a TLS stand-in in front of the real
+guacd and checks that it reaches the gateway's HTTP request only when the
+gateway's certificate is in `cert-fingerprints`. The smoke test covers the
+gateway fields in the editor.
+
 Traps: an `xclip` started in the background dies with `podman exec`, and then
 there is nothing for xrdp to copy, so the test keeps `xclip -quiet` running in
 the foreground. A Ctrl+V into the terminal leaves bash in quoted-insert, so the

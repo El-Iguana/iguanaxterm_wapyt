@@ -75,7 +75,7 @@ def resolve_site(session_id: int, user_id: int) -> Optional[tuple[dict, dict]]:
     if row is None:
         return None
     profile = dict(row)
-    for secret in ("password", "private_key", "passphrase"):
+    for secret in ("password", "private_key", "passphrase", "gateway_password"):
         profile[secret] = decrypt(profile.get(secret) or "")
     return profile, access
 
@@ -121,6 +121,19 @@ def pin_host_key(session_id: int) -> Callable[[str], None]:
         with get_db() as conn:
             conn.execute(
                 "UPDATE sessions SET host_key = ? WHERE id = ? AND host_key = ''",
+                (serialized, int(session_id)),
+            )
+
+    return _store
+
+
+def pin_gateway_key(session_id: int) -> Callable[[str], None]:
+    """:func:`pin_host_key` for an RDP site's gateway certificate (#75)."""
+
+    def _store(serialized: str) -> None:
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE sessions SET gateway_key = ? WHERE id = ? AND gateway_key = ''",
                 (serialized, int(session_id)),
             )
 

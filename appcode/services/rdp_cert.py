@@ -21,6 +21,7 @@ same code works on a socket and on an SSH tunnel channel.
 from __future__ import annotations
 
 import hashlib
+import socket
 import ssl
 import struct
 import warnings
@@ -85,6 +86,43 @@ def guacd_fingerprint(pin: str) -> str:
     """
     digest = pin[len(PREFIX):] if pin.startswith(PREFIX) else pin
     return "sha256:" + ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))
+
+
+def probe_tls(host: str, port: int, timeout: float = 10.0) -> str:
+    """
+    The pin of a plain TLS server's certificate: an RD Gateway (#75), which
+    speaks HTTPS, so no X.224 first. Nothing is verified here; the caller
+    compares the pin.
+    """
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout) as raw:
+            with context.wrap_socket(raw, server_hostname=host or None) as tls:
+                der = tls.getpeercert(binary_form=True)
+    except (OSError, ssl.SSLError) as exc:
+        raise CertProbeError(str(exc)) from exc
+    if not der:
+        raise CertProbeError("no certificate")
+    return fingerprint(der)
+
+
+def thumbprint(value: Optional[str]) -> str:
+    """
+    A certificate thumbprint a person typed or pasted, as FreeRDP compares it:
+    ``sha1:aa:bb:…`` (the Thumbprint Windows shows) or ``sha256:…``. Spaces and
+    colons are ignored. "" for nothing; ValueError for anything else (#75).
+    """
+    digits = "".join(ch for ch in (value or "") if ch not in " :\t\u200e").lower()
+    if not digits:
+        return ""
+    if any(ch not in "0123456789abcdef" for ch in digits):
+        raise ValueError("not hex")
+    names = {40: "sha1", 64: "sha256"}
+    if len(digits) not in names:
+        raise ValueError("not a SHA-1 or SHA-256 thumbprint")
+    return names[len(digits)] + ":" + ":".join(digits[i:i + 2] for i in range(0, len(digits), 2))
 
 
 def is_rdp_pin(value: Optional[str]) -> bool:

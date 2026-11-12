@@ -821,7 +821,7 @@ wheels = [
 
 [[package]]
 name = "wapyt"
-version = "0.3.0"
+version = "0.3.1"
 source = { directory = "../wa_pytincture_widgetset" }
 
 [package.metadata]

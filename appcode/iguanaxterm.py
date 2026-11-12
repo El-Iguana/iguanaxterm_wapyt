@@ -48,6 +48,8 @@ from wapyt import (
     Terminal,
     TerminalConfig,
     TerminalTheme,
+    ThemeEditor,
+    ThemeEditorConfig,
     Toolbar,
     ToolbarButton,
     ToolbarConfig,
@@ -58,6 +60,7 @@ from wapyt import (
     TreeAction,
     TreeConfig,
     TreeItem,
+    restore_theme,
 )
 
 from services.about import LICENSE as ABOUT_LICENSE, RELEASES_URL, REPO, REPO_URL, VERSION, WIKI_URL
@@ -98,6 +101,11 @@ APP_FAVICON = "static/el_iguana_avatar.webp"
 
 UNSORTED = "Ungrouped"
 
+# Where the theme editor keeps its theme and the light/dark choice, in this
+# browser's localStorage.
+_THEME_KEY = "iguanaxterm:theme"
+_THEME_MODE_KEY = "iguanaxterm:mode"
+
 TERMINAL_THEME = TerminalTheme(
     background="#1a1a2e",
     foreground="#e0e0e0",
@@ -132,6 +140,7 @@ _TOOLBAR_BUTTONS = (
     ("users", "Users", "mdi-account-group"),
     ("lists", "Site lists", "mdi-format-list-checks"),
     ("password", "Password", "mdi-key"),
+    ("theme", "Theme", "mdi-palette"),
     ("about", "About", "mdi-information-outline"),
 )
 
@@ -206,7 +215,11 @@ class IguanaXterm(MainWindow):
     # construction, so defining both builds the UI twice.
 
     def load_ui(self) -> None:
-        self.set_theme("dark")
+        # Light or dark as last chosen in the theme editor (dark until then),
+        # then any colours, radius and font saved there. Both live in this
+        # browser's localStorage only.
+        self.set_theme(self._saved_mode())
+        restore_theme(_THEME_KEY)
         # pytincture's bootstrap page leaves the tab title empty once the app
         # takes over, so the window identifies itself here.
         js.document.title = "IguanaXterm"
@@ -575,6 +588,31 @@ class IguanaXterm(MainWindow):
             _spawn(self._check_release(), "release check")
         _spawn(self._about_rdp(), "rdp status")
 
+    def _theme_dialog(self) -> None:
+        """wapyt's ThemeEditor: palettes, colours, radius and font, live on the page."""
+        modal = ModalWindow(ModalConfig(dispose_on_close=True, title="Theme", width=720, height=680))
+        editor = ThemeEditor(ThemeEditorConfig(storage_key=_THEME_KEY, title=None), container=modal.body)
+        editor.on_mode(lambda e: self._remember_mode(e.get("mode")))
+        modal.on_close(lambda _e: editor.destroy())
+        modal.show()
+
+    @staticmethod
+    def _saved_mode() -> str:
+        try:
+            mode = js.window.localStorage.getItem(_THEME_MODE_KEY)
+        except Exception:
+            mode = None
+        return mode if mode in ("light", "dark") else "dark"
+
+    @staticmethod
+    def _remember_mode(mode) -> None:
+        if mode not in ("light", "dark"):
+            return
+        try:
+            js.window.localStorage.setItem(_THEME_MODE_KEY, mode)
+        except Exception:
+            pass
+
     async def _about_rdp(self) -> None:
         """About's RDP line (#55): whether guacd answers, is down, or isn't set up."""
         try:
@@ -817,6 +855,8 @@ class IguanaXterm(MainWindow):
             self._password_dialog()
         elif action == "about":
             self._about_dialog()
+        elif action == "theme":
+            self._theme_dialog()
         elif action == "saved":
             _spawn(self._saved_panel(), "saved files")
         elif action == "reconnect_all":

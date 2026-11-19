@@ -159,6 +159,43 @@ def _local_platform() -> dict:
     return {"windows": windows, "case_insensitive": windows or "mac" in platform}
 
 
+def _local_is_linux() -> bool:
+    """Kept out of ``_local_platform``, whose dict is ``LocalNames(**...)``."""
+    data = js.navigator.userAgentData
+    return "linux" in str(data.platform if data else js.navigator.platform or "").lower()
+
+
+_SAVE_DIALOGS_KEY = "ix-save-dialogs"
+
+
+def _save_dialogs_usable() -> bool:
+    """
+    Whether downloads should go through the File System Access save dialogs.
+
+    Not on Linux. Chromium refuses those dialogs anything under ``/var`` as
+    "system files", and on Fedora Atomic (Bazzite, Silverblue, Kinoite)
+    ``/home`` is a symlink to ``/var/home``, so every folder the user owns was
+    refused. A refusal followed by Cancel reaches us as a plain cancel, so it
+    cannot be told apart and fallen back from. Linux therefore gets the
+    no-picker path: files through the browser's own download (which still
+    asks where, if the browser is set to), folders saved on the server.
+
+    ``localStorage["ix-save-dialogs"]`` set to ``"on"`` or ``"off"`` overrides
+    the platform default, per browser: a Linux without the ``/var`` home can
+    have the dialogs back, and the browser smoke tests (Linux, stubbed
+    pickers) use it to reach the picker path.
+    """
+    if not filetransfer.capabilities().pickers:
+        return False
+    try:
+        override = js.window.localStorage.getItem(_SAVE_DIALOGS_KEY)
+    except Exception:  # storage blocked: fall through to the default
+        override = None
+    if override in ("on", "off"):
+        return override == "on"
+    return not _local_is_linux()
+
+
 def _recovered(outcome) -> str:
     """Queue detail for a finished download that had to pick itself back up."""
     if outcome.restarted:
@@ -2146,7 +2183,7 @@ class IguanaXterm(MainWindow):
         text_el = note.querySelector(".ix-sftp-note-text")
         if not text_el or text_el.textContent:
             return
-        if filetransfer.capabilities().pickers:
+        if _save_dialogs_usable():
             return
         _spawn(self._fill_picker_note(note, text_el), "picker note")
 
@@ -2166,6 +2203,12 @@ class IguanaXterm(MainWindow):
         instead = f"Files go to your downloads folder; folders are saved in {where}."
         if not filetransfer.capabilities().secure_context:
             notice = f"Choosing where to save needs HTTPS (or 127.0.0.1). {instead}"
+        elif filetransfer.capabilities().pickers and _local_is_linux():
+            notice = (
+                "On Linux this browser cannot choose where to save: it refuses "
+                "folders under /var, which on Bazzite or Silverblue is all of "
+                f"/home. {instead}"
+            )
         # getattr, not js.navigator.brave: a missing JS property raises
         # AttributeError in Pyodide rather than reading as undefined.
         elif getattr(js.navigator, "brave", None):
@@ -2293,13 +2336,12 @@ class IguanaXterm(MainWindow):
         rows = [entry["table"].get_row(p) or {} for p in paths]
         files = [r for r in rows if r and not r.get("is_dir")]
         folders = [r for r in rows if r and r.get("is_dir")]
-        caps = filetransfer.capabilities()
-
-        # No pickers (Firefox, or a misconfigured non-secure origin): fall back
+        # No usable pickers (Firefox, Linux -- see _save_dialogs_usable -- or a
+        # misconfigured non-secure origin): fall back
         # to the browser's download directory and say so, rather than silently
         # doing something different. The original app learned this the hard way
         # — a silent fallback produced one Save-As dialog per file.
-        if not caps.pickers:
+        if not _save_dialogs_usable():
             for row in files:
                 filetransfer.download_via_anchor(
                     self._download_url(entry["session_id"], row["id"]), row["name"]

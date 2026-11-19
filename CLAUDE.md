@@ -123,6 +123,14 @@ Traps measured writing INSTALL.md:
   (still loopback only) so there is no pasta to go stale; `compose.yaml`
   keeps its bridge network, which was fast. If transfers crawl again, first
   restart the container and measure again, before suspecting the app.
+- **Chromium's file pickers refuse `/var`, i.e. all of `/home` on Bazzite**
+  (2026-11-19). The File System Access pickers treat `/var` as "system
+  files", and on Fedora Atomic `/home` → `/var/home`. Uploads use
+  `<input type=file>` (wapyt `fix/upload-picker-no-blocklist`, WAwesome-AI
+  PR #86); downloads skip the save dialogs on Linux
+  (`_save_dialogs_usable`): files via the browser's own download, folders
+  saved on the server. `localStorage["ix-save-dialogs"] = "on"|"off"`
+  overrides per browser; `transfer_smoke.py` sets `on` to reach the picker path.
 - **The healthcheck sends the canonical host name** (`manage.py health`), or it
   fails behind a proxy. Verified healthy behind Caddy; terminals over
   WebSockets work through it.

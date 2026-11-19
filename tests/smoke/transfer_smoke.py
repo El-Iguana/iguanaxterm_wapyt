@@ -101,6 +101,9 @@ window.showSaveFilePicker = async (opts) => {
 };
 window.showDirectoryPicker = async () => new FakeDirHandle('/dest');
 window.showOpenFilePicker = undefined;   // force the <input> path for uploads
+// The app skips the save dialogs on Linux (Chromium refuses /var, i.e. all of
+// /home on Fedora Atomic); this run is on Linux and stubs them, so opt back in.
+try { localStorage.setItem('ix-save-dialogs', 'on'); } catch (e) {}
 """
 
 

@@ -639,7 +639,7 @@ browser (guacamole-common-js) ⇄ /ws/rdp/<id> ⇄ rdp_ws.py ⇄ TCP ⇄ guacd �
 Firefox has no File System Access pickers, and no browser offers them on a
 non-secure origin. There a folder download is copied into
 `GANXTERM_DOWNLOAD_DIR/<username>/` on the server instead (`download_jobs.py`),
-and **Saved files** in the toolbar browses it, fetches files back to the
+and **Saved files** in the sidebar browses it, fetches files back to the
 browser and deletes. Plain files in the same selection still go straight to
 the browser's downloads. Chrome and Edge are unchanged: they get the picker.
 
@@ -691,9 +691,37 @@ laggy. The Python `Terminal` wrapper drives lifecycle only.
 Same reasoning for file transfers: they use `services/transfer.py`, not the BFF,
 because a JSON BFF means base64 — a third larger and resident in Pyodide's heap.
 
+### The look: AI Ecosystem's, in `static/iguanaxterm.css` (2026-11-20)
+
+The page follows the AI Ecosystem dashboard (`ai-stack/stack-ui`,
+`stackui.css`): slate surfaces, one accent, status colours with a soft tint,
+uppercase section headings, cards with a coloured top edge.
+
+- **All app CSS is `appcode/static/iguanaxterm.css`**, linked once by
+  `_load_css()` with `?v=VERSION`. The `_*_CSS` strings injected per dialog
+  are gone. Colours are `--ix-*` tokens (the `--su-*` values), redefined under
+  `[data-wapyt-theme="dark"]`, so light mode is no longer dark pane chrome on a
+  light page. `--ix-accent` follows wapyt's accent, so the Theme editor still
+  recolours it. Terminals and desktops stay dark in both themes
+  (`--ix-term-bg`, `TERMINAL_THEME`).
+- **Sidebar:** brand, a *Sessions* heading over the tree, then `_SIDEBAR_NAV`
+  (*Manage*: Users, Site lists; *You*: Saved files, Password, Theme, About) as
+  `.ix-nav[data-ix-nav="…"]` buttons, routed by the delegated click listener
+  through the same `_on_toolbar` keys. *Manage* is hidden for Users
+  (`[data-ix-nav-group="manage"]`).
+- **Home screen** (`_render_home`, `#ix-home`): saved sessions as cards per
+  folder, shared lists last. It is shown by CSS alone,
+  `.ix-workspace:has(.wapyt-tabwidget-panels:empty):not(:has(.grid-stack-item))`,
+  so there is no open/closed state to keep in step. Re-rendered by
+  `_rebuild_tree` and `_load_identity`. Connect / Files / Edit and
+  double-click go through `data-home-*` attributes.
+- **The Files capability note** is its own one-line banner under the SFTP
+  toolbar, ellipsised, the full sentence in its `title`.
+
 ### The header toolbar is a wapyt `Toolbar`
 
-`_toolbar_config()` builds it from `_TOOLBAR_BUTTONS` plus Reconnect all,
+`_toolbar_config()` builds it from `_TOOLBAR_BUTTONS` (the session actions:
+New, Edit, Delete, Connect, Files) plus Reconnect all,
 the tabbed/tiled switch (a `group="mode"` pair), the update notice, the user
 name and Logout; `_on_toolbar_click` routes clicks. Change it through the
 widget (`set_hidden`, `set_text`, `set_active`), never by querying its DOM:
@@ -701,7 +729,7 @@ widget (`set_hidden`, `set_text`, `set_active`), never by querying its DOM:
 `_check_release` all do. In narrow windows it drops to icons on its own.
 The per-pane SFTP toolbars are still HTML, handled by the one document-level
 delegated listener in `_wire_toolbar`. Smoke tests select header buttons as
-`.wapyt-toolbar-btn[data-id="…"]`.
+`.wapyt-toolbar-btn[data-id="…"]`, sidebar ones as `.ix-nav[data-ix-nav="…"]`.
 
 ### Toasts and dialogs go through `wapyt.message`
 
@@ -1184,7 +1212,7 @@ tab inside the connection's own pane.
 
   | tier | what gives way |
   |---|---|
-  | ≤700px | the capability note's sentence (icon keeps it as a tooltip); `permissions` column |
+  | ≤700px | `permissions` column (the capability note is its own ellipsised row since 2026-11-20) |
   | ≤560px | SFTP toolbar labels → icons; `modified` column |
   | ≤420px | crumb width, queue name and status widths |
 

@@ -1,0 +1,397 @@
+/* IguanaXterm — styles for the parts wapyt does not draw: the sidebar, the
+   home screen, pane chrome, the file browser, the transfer queue and dialogs.
+
+   Same palette and shapes as the AI Ecosystem dashboard (ai-stack/stack-ui,
+   stackui.css): slate surfaces, one blue accent, status colours with a soft
+   tint each. Colours are tokens, redefined for wapyt's dark theme, so both
+   themes come from one set of rules -- nothing below names a colour twice.
+   The accent follows wapyt's, so the Theme editor still recolours it. */
+
+:root {
+  --ix-bg: #ffffff;
+  --ix-surface: #f8fafc;
+  --ix-raised: #ffffff;
+  --ix-sunken: #f1f5f9;
+  --ix-border: #e2e8f0;
+  --ix-text: #0f172a;
+  --ix-dim: #64748b;
+  --ix-hover: rgba(15, 23, 42, 0.05);
+  --ix-accent: var(--wapyt-accent, #2563eb);
+  --ix-accent-soft: rgba(37, 99, 235, 0.10);
+  --ix-good: #059669;
+  --ix-good-soft: rgba(5, 150, 105, 0.12);
+  --ix-warn: #b45309;
+  --ix-warn-soft: rgba(217, 119, 6, 0.12);
+  --ix-bad: #dc2626;
+  --ix-bad-soft: rgba(220, 38, 38, 0.10);
+  /* Terminals and remote desktops stay dark in both themes, like a console. */
+  --ix-term-bg: #0f172a;
+  --ix-term-text: #e2e8f0;
+  --ix-radius: 10px;
+  --ix-mono: ui-monospace, "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+}
+
+[data-wapyt-theme="dark"] {
+  --ix-bg: #0f172a;
+  --ix-surface: #111c31;
+  --ix-raised: #1e293b;
+  --ix-sunken: #0b1424;
+  --ix-border: #2b3a52;
+  --ix-text: #f1f5f9;
+  --ix-dim: #94a3b8;
+  --ix-hover: rgba(148, 163, 184, 0.10);
+  --ix-accent: var(--wapyt-accent-strong-dark, #60a5fa);
+  --ix-accent-soft: rgba(96, 165, 250, 0.14);
+  --ix-good: #34d399;
+  --ix-good-soft: rgba(52, 211, 153, 0.14);
+  --ix-warn: #fbbf24;
+  --ix-warn-soft: rgba(251, 191, 36, 0.14);
+  --ix-bad: #f87171;
+  --ix-bad-soft: rgba(248, 113, 113, 0.14);
+  --ix-term-bg: #0b1220;
+}
+
+body { background: var(--ix-bg); }
+
+/* --- shared bits ---------------------------------------------------------- */
+.ix-dim { color: var(--ix-dim); }
+.ix-heading { font-size: 11.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--ix-dim); }
+.ix-btn { font: inherit; font-size: 13px; display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 11px; border-radius: 7px; border: 1px solid var(--ix-border);
+  background: var(--ix-raised); color: var(--ix-text); cursor: pointer; white-space: nowrap; }
+.ix-btn:hover:not(:disabled) { border-color: var(--ix-accent); color: var(--ix-accent); }
+.ix-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.ix-btn .mdi { font-size: 15px; }
+.ix-btn.ix-primary { background: var(--ix-accent); border-color: var(--ix-accent); color: #fff; }
+[data-wapyt-theme="dark"] .ix-btn.ix-primary { color: #0b1220; }
+.ix-btn.ix-primary:hover:not(:disabled) { filter: brightness(1.08); color: #fff; }
+[data-wapyt-theme="dark"] .ix-btn.ix-primary:hover:not(:disabled) { color: #0b1220; }
+.ix-btn.ix-ghost { background: transparent; border-color: transparent; color: var(--ix-dim); }
+.ix-btn.ix-ghost:hover:not(:disabled) { color: var(--ix-accent); border-color: transparent; }
+.ix-btn[hidden] { display: none; }
+
+.ix-pill { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 3px 8px; border-radius: 999px; background: var(--ix-accent-soft);
+  color: var(--ix-accent); white-space: nowrap; }
+.ix-pill.shared { background: var(--ix-good-soft); color: var(--ix-good); }
+
+/* --- sidebar -------------------------------------------------------------- */
+.ix-sidebar { display: flex; flex-direction: column; height: 100%; min-height: 0;
+  background: var(--ix-bg); color: var(--ix-text); }
+.ix-brand { display: flex; align-items: center; gap: 10px; padding: 12px 14px 10px;
+  flex: 0 0 auto; }
+.ix-brand-logo { flex: 0 0 auto; width: 36px; height: 36px; border-radius: 50%;
+  object-fit: cover; border: 1px solid var(--ix-border); background: var(--ix-sunken); }
+.ix-brand-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.ix-brand-name { font-size: 15px; font-weight: 650; color: var(--ix-text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ix-brand-sub { font-size: 11px; color: var(--ix-dim); letter-spacing: 0.02em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ix-side-head { display: flex; align-items: center; gap: 8px; padding: 10px 16px 4px;
+  flex: 0 0 auto; }
+.ix-side-head .ix-heading { flex: 1; }
+.ix-sidebar-tree { flex: 1 1 auto; min-height: 0; padding: 0 6px; }
+/* The tree draws its own background; let the sidebar's show through. */
+.ix-sidebar-tree .wapyt-tree { background: transparent; }
+
+.ix-side-nav { flex: 0 0 auto; padding: 6px 8px 10px; border-top: 1px solid var(--ix-border); }
+.ix-side-nav .ix-heading { display: block; padding: 10px 10px 4px; }
+.ix-side-nav .ix-heading[hidden] { display: none; }
+.ix-nav { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px;
+  border: 0; border-radius: 8px; background: transparent; color: var(--ix-text);
+  font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
+.ix-nav:hover { background: var(--ix-hover); }
+.ix-nav .mdi { font-size: 18px; color: var(--ix-dim); width: 20px; text-align: center; }
+.ix-nav:hover .mdi { color: var(--ix-accent); }
+.ix-nav[hidden] { display: none; }
+
+/* --- workspace and the home screen ---------------------------------------- */
+.ix-workspace { position: relative; height: 100%; min-height: 0; background: var(--ix-surface); }
+.ix-host { position: absolute; inset: 0; min-height: 0; }
+.ix-host[hidden] { display: none; }
+.wapyt-tabwidget-tabs:empty { display: none; }
+
+/* The home screen shows whenever no connection is open. */
+.ix-home { position: absolute; inset: 0; overflow: auto; display: none; z-index: 5;
+  background: var(--ix-surface); color: var(--ix-text); }
+/* No tab panel and no tile: tiled mode moves pane roots out of the tabs. */
+.ix-workspace:has(.wapyt-tabwidget-panels:empty):not(:has(.grid-stack-item)) .ix-home {
+  display: block; }
+.ix-home-page { padding: 20px 24px 32px; max-width: 1400px; margin: 0 auto; box-sizing: border-box; }
+.ix-home-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+.ix-home-head h1 { font-size: 20px; font-weight: 650; margin: 0; }
+.ix-home-section { margin-bottom: 26px; }
+.ix-section-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.ix-section-head h2 { font-size: 13px; font-weight: 700; margin: 0; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--ix-dim); }
+.ix-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+.ix-card { background: var(--ix-raised); border: 1px solid var(--ix-border);
+  border-radius: var(--ix-radius); padding: 14px 16px; display: flex; flex-direction: column;
+  gap: 10px; min-width: 0; border-top: 3px solid var(--ix-accent); cursor: default; }
+.ix-card.shared { border-top-color: var(--ix-good); }
+.ix-card:hover { border-color: var(--ix-accent); border-top-color: var(--ix-accent); }
+.ix-card-head { display: flex; align-items: center; gap: 12px; }
+.ix-card-icon { font-size: 24px; color: var(--ix-accent); width: 28px; text-align: center; }
+.ix-card.shared .ix-card-icon { color: var(--ix-good); }
+.ix-card-titles { flex: 1; min-width: 0; }
+.ix-card-title { font-size: 15.5px; font-weight: 650; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.ix-card-sub { font-size: 12.5px; color: var(--ix-dim); font-family: var(--ix-mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ix-card-desc { margin: 0; color: var(--ix-dim); font-size: 13px; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.ix-card-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; }
+.ix-empty { padding: 48px 24px; text-align: center; color: var(--ix-dim);
+  border: 1px dashed var(--ix-border); border-radius: var(--ix-radius); font-size: 14px; }
+.ix-empty .mdi { display: block; font-size: 36px; margin-bottom: 8px; }
+.ix-tip { margin-top: 8px; font-size: 12.5px; color: var(--ix-dim); }
+
+/* --- tiled grid ------------------------------------------------------------ */
+#ix-grid-host { overflow: auto; background: var(--ix-surface); }
+#ix-grid-host .grid-stack { min-height: 100%; }
+/* The item content is the pane's parent, so it needs the same min-height:0
+   discipline as a layout cell or a terminal pushes it wider than its cell. */
+.grid-stack-item-content { display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  overflow: hidden; background: var(--ix-raised); border: 1px solid var(--ix-border);
+  border-radius: var(--ix-radius); }
+.grid-stack-item-content .ix-pane { height: 100%; }
+/* Grip and close only mean anything while tiled: in tabbed mode the tab strip
+   already moves and closes a pane. */
+.ix-pane-grip, .ix-pane-close, .ix-pane-max { display: none; }
+.grid-stack .ix-pane-grip { display: inline-flex; align-items: center; color: var(--ix-dim);
+  cursor: move; font-size: 16px; padding: 0 2px; opacity: 0.7; }
+.grid-stack .ix-pane-grip:hover { opacity: 1; }
+.grid-stack .ix-pane-close, .grid-stack .ix-pane-max { display: inline-flex; align-items: center;
+  justify-content: center; width: 22px; height: 22px; padding: 0; color: var(--ix-dim);
+  background: transparent; border: none; border-radius: 5px; cursor: pointer; line-height: 1; }
+.grid-stack .ix-pane-close { font-size: 17px; }
+.grid-stack .ix-pane-max { font-size: 14px; }
+.grid-stack .ix-pane-close:hover { background: var(--ix-bad-soft); color: var(--ix-bad); }
+.grid-stack .ix-pane-max:hover { background: var(--ix-hover); color: var(--ix-text); }
+.grid-stack .ix-pane-max[aria-pressed="true"] { color: var(--ix-accent); }
+
+/* Maximize is presentational: the tile is overlaid on the grid rather than
+   resized in it, so its neighbours keep their positions and the saved layout
+   is untouched. GridStack sets width/height inline as calc() over its CSS
+   variables, hence !important. */
+#ix-grid-host .grid-stack-item[data-maximized] { position: absolute !important;
+  inset: 0 !important; width: auto !important; height: auto !important;
+  margin: 0 !important; transform: none !important; z-index: 30; }
+/* Dragging or resizing a tile that is pretending to fill the workspace would
+   move it in the grid model behind the overlay. */
+#ix-grid-host .grid-stack-item[data-maximized] .ui-resizable-handle,
+#ix-grid-host .grid-stack-item[data-maximized] .ix-pane-grip { display: none; }
+
+/* A restored pane waiting to be dialled. */
+.ix-reconnect { display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; height: 100%; padding: 20px; text-align: center; background: var(--ix-surface); }
+.ix-reconnect-icon { font-size: 32px; color: var(--ix-dim); opacity: 0.6; }
+.ix-reconnect-name { color: var(--ix-text); font-size: 15px; font-weight: 650; }
+.ix-reconnect-host { color: var(--ix-dim); font: 12px var(--ix-mono); }
+.ix-reconnect-note { max-width: 46ch; color: var(--ix-warn); font-size: 12.5px; line-height: 1.45; }
+.ix-reconnect-btn { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px;
+  padding: 6px 14px; border-radius: 7px; border: 1px solid var(--ix-accent);
+  background: var(--ix-accent); color: #fff; cursor: pointer; font: inherit; font-size: 13px; }
+[data-wapyt-theme="dark"] .ix-reconnect-btn { color: #0b1220; }
+.ix-reconnect-btn:hover { filter: brightness(1.08); }
+
+/* --- a pane: its tab strip, panels and remote screens ---------------------- */
+.ix-pane { display: flex; flex-direction: column; height: 100%; min-height: 0;
+  container-type: inline-size; background: var(--ix-surface); }
+.ix-pane-tabs { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; padding: 5px 8px;
+  background: var(--ix-raised); border-bottom: 1px solid var(--ix-border); }
+.ix-pane-tab { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px;
+  color: var(--ix-dim); background: transparent; border: 1px solid transparent;
+  border-radius: 7px; cursor: pointer; font: inherit; font-size: 12.5px; }
+.ix-pane-tab:hover:not(:disabled) { background: var(--ix-hover); color: var(--ix-text); }
+.ix-pane-tab[aria-selected="true"] { background: var(--ix-accent-soft); color: var(--ix-accent);
+  font-weight: 600; }
+.ix-pane-tab:disabled { opacity: 0.4; cursor: not-allowed; }
+.ix-pane-tab .mdi { font-size: 15px; }
+.ix-pane-spacer { flex: 1 1 auto; }
+/* Tiled only, like the grip. Shrinks before anything else in the strip, and
+   outlives the host label in a narrow tile since it is the one that says
+   which connection this is. */
+.ix-pane-name { display: none; }
+.grid-stack .ix-pane-name { display: inline-flex; align-items: center; gap: 6px; flex: 0 1 auto;
+  min-width: 0; margin: 0 8px 0 2px; color: var(--ix-text); font-size: 13px; font-weight: 650; }
+.ix-pane-name .mdi { font-size: 15px; color: var(--ix-accent); flex: 0 0 auto; }
+.ix-pane-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ix-pane-host { color: var(--ix-dim); font: 11.5px var(--ix-mono); padding: 2px 8px;
+  margin-right: 4px; border-radius: 999px; background: var(--ix-sunken);
+  border: 1px solid var(--ix-border); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; max-width: 40%; }
+/* Both panels are always mounted and stacked; only visibility changes, so the
+   terminal's host element is created once and never replaced. */
+.ix-pane-body { position: relative; flex: 1 1 auto; min-height: 0; }
+.ix-pane-panel { position: absolute; inset: 0; min-width: 0; min-height: 0; }
+.ix-pane-panel[data-panel="terminal"] { background: var(--ix-term-bg); }
+.ix-pane-panel[hidden], .ix-pane-tab[hidden] { display: none; }
+/* Breathing room around the terminal text, in the terminal's own colour. */
+.ix-pane-panel .wapyt-terminal { padding: 6px 0 0 8px; box-sizing: border-box;
+  background: var(--ix-term-bg); }
+/* A remote desktop: the canvas scales to fill this, letterboxed. */
+.ix-vnc, .ix-rdp { position: absolute; inset: 0; background: var(--ix-term-bg);
+  overflow: hidden; outline: none; }
+.ix-rdp { cursor: default; }
+.ix-rdp .ix-rdp-display { position: absolute; }
+.ix-rdp:focus-visible { box-shadow: inset 0 0 0 2px var(--ix-accent); }
+.ix-pane-cad { display: inline-flex; align-items: center; gap: 5px; margin-right: 4px;
+  padding: 3px 9px; color: var(--ix-text); background: var(--ix-raised);
+  border: 1px solid var(--ix-border); border-radius: 7px; cursor: pointer; font: inherit;
+  font-size: 12px; white-space: nowrap; }
+.ix-pane-cad:hover { border-color: var(--ix-accent); color: var(--ix-accent); }
+.ix-pane-cad[aria-pressed="true"] { color: var(--ix-warn); }
+/* display:inline-flex above would otherwise beat the hidden attribute. */
+.ix-pane-cad[hidden] { display: none; }
+.ix-pane-cad .mdi { font-size: 14px; }
+/* A narrow pane drops the tab labels to icons. */
+@container (max-width: 420px) {
+  .ix-pane-tab span:not(.mdi) { display: none; }
+  .ix-pane-host { display: none; }
+  .ix-pane-cad span:not(.mdi) { display: none; }
+}
+
+/* --- the file browser ------------------------------------------------------ */
+.ix-sftp { display: flex; flex-direction: column; height: 100%; min-height: 0;
+  background: var(--ix-surface); color: var(--ix-text); }
+.ix-sftp-bar { display: flex; align-items: center; gap: 4px; padding: 6px 8px; flex: 0 0 auto;
+  background: var(--ix-raised); border-bottom: 1px solid var(--ix-border); }
+.ix-sftp-btn { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px;
+  color: var(--ix-text); background: transparent; border: 1px solid transparent;
+  border-radius: 7px; cursor: pointer; font: inherit; font-size: 12.5px; }
+.ix-sftp-btn:hover { background: var(--ix-hover); color: var(--ix-accent); }
+.ix-sftp-btn .mdi { font-size: 15px; color: var(--ix-dim); }
+.ix-sftp-btn:hover .mdi { color: var(--ix-accent); }
+.ix-sftp-sep { width: 1px; height: 18px; margin: 0 5px; background: var(--ix-border); }
+.ix-sftp-spacer { flex: 1 1 auto; }
+/* Why downloads can't choose a folder here: one line under the toolbar, the
+   whole sentence in the tooltip. */
+.ix-sftp-note { display: none; align-items: center; gap: 8px; flex: 0 0 auto; padding: 6px 12px;
+  background: var(--ix-warn-soft); color: var(--ix-text); font-size: 12.5px;
+  border-bottom: 1px solid var(--ix-border); }
+.ix-sftp-note[data-shown] { display: flex; }
+.ix-sftp-note-icon { font-size: 16px; flex: 0 0 auto; color: var(--ix-warn); }
+.ix-sftp-note-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+/* nowrap + scroll: wrapping turned a deep path into four stacked lines that
+   ate the listing in a narrow pane. */
+.ix-crumbs { display: flex; flex-wrap: nowrap; align-items: center; gap: 2px; padding: 6px 8px;
+  flex: 0 0 auto; background: var(--ix-surface); border-bottom: 1px solid var(--ix-border);
+  overflow-x: auto; scrollbar-width: none; }
+.ix-crumbs::-webkit-scrollbar { height: 0; }
+.ix-crumb { flex: 0 0 auto; max-width: 22ch; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; padding: 3px 8px; color: var(--ix-text); background: transparent;
+  border: none; border-radius: 6px; cursor: pointer; font: 12.5px var(--ix-mono); }
+.ix-crumb:hover { background: var(--ix-hover); color: var(--ix-accent); }
+.ix-crumb-up { color: var(--ix-accent); font-family: inherit; }
+.ix-sftp-table { flex: 1 1 auto; min-height: 0; }
+
+/* The transfer queue. A short grid cell cannot spare 210px of queue; the
+   percentage resolves because .ix-sftp sits in an absolutely positioned pane
+   panel, so its height is definite. */
+.ix-queue { flex: 0 0 auto; max-height: min(210px, 45%); display: flex; flex-direction: column;
+  background: var(--ix-raised); border-top: 1px solid var(--ix-border); }
+.ix-queue[hidden] { display: none; }
+.ix-queue-head { display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 12px; border-bottom: 1px solid var(--ix-border); }
+.ix-queue-title { font-size: 11.5px; font-weight: 700; color: var(--ix-dim);
+  letter-spacing: 0.06em; text-transform: uppercase; }
+.ix-queue-clear { padding: 2px 8px; color: var(--ix-dim); background: transparent; border: none;
+  border-radius: 5px; cursor: pointer; font: inherit; font-size: 12px; }
+.ix-queue-clear:hover { background: var(--ix-hover); color: var(--ix-accent); }
+.ix-queue-rows { overflow: auto; min-height: 0; }
+.ix-queue-row { display: flex; align-items: center; gap: 8px; padding: 5px 12px; font-size: 12.5px;
+  color: var(--ix-text); }
+.ix-queue-row .mdi { font-size: 14px; color: var(--ix-dim); flex: 0 0 auto; }
+/* The row's wapyt ProgressBar. Widths are set here rather than with
+   label_width/value_width (inline styles), so the narrow-pane container query
+   below can still shrink them. */
+.ix-queue-progress { flex: 1 1 auto; min-width: 0; }
+.ix-queue-progress .wapyt-progress { color: var(--ix-text); }
+.ix-queue-progress .wapyt-progress-label { flex: 0 1 240px; max-width: none; }
+.ix-queue-progress .wapyt-progress-track { min-width: 60px; }
+.ix-queue-progress .wapyt-progress-value { min-width: 96px; text-align: right; color: var(--ix-dim);
+  font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ix-queue-cancel, .ix-queue-resume { flex: 0 0 auto; width: 22px; height: 22px; padding: 0;
+  background: transparent; border: 0; border-radius: 5px; cursor: pointer; font-size: 14px; }
+.ix-queue-cancel { color: var(--ix-dim); }
+.ix-queue-cancel:hover { background: var(--ix-bad-soft); color: var(--ix-bad); }
+.ix-queue-resume { color: var(--ix-accent); }
+.ix-queue-resume:hover { background: var(--ix-accent-soft); }
+.ix-queue-row[data-state] .ix-queue-cancel { visibility: hidden; }
+/* A paused download can still be discarded. */
+.ix-queue-row[data-state="paused"] .ix-queue-cancel { visibility: visible; }
+.ix-queue-row[data-state="done"] .wapyt-progress-value { color: var(--ix-good); }
+.ix-queue-row[data-state="failed"] .wapyt-progress-value { color: var(--ix-bad); }
+.ix-queue-row[data-state="cancelled"] { opacity: 0.55; }
+
+/* Narrow panes. Container queries, not media queries -- a pane is narrow
+   because the grid cell is narrow, which has nothing to do with the window.
+   Below ~700px the secondary columns give way so Name -- the one column that
+   matters -- never disappears behind a horizontal scrollbar; they are still
+   in the context menu and the tooltip. */
+@container (max-width: 700px) {
+  .ix-sftp-table th[data-column-id="permissions"],
+  .ix-sftp-table td[data-column-id="permissions"] { display: none; }
+}
+@container (max-width: 560px) {
+  .ix-sftp-table th[data-column-id="modified"],
+  .ix-sftp-table td[data-column-id="modified"] { display: none; }
+  .ix-sftp-btn span:not(.mdi) { display: none; }
+  .ix-sftp-btn { padding: 5px 7px; }
+  .ix-sftp-bar { gap: 2px; padding: 6px; }
+  .ix-sftp-sep { margin: 0 3px; }
+}
+@container (max-width: 420px) {
+  .ix-crumb { max-width: 12ch; }
+  .ix-queue-progress .wapyt-progress-label { flex: 0 1 120px; }
+  .ix-queue-progress .wapyt-progress-value { min-width: 64px; }
+}
+
+/* --- dialogs ---------------------------------------------------------------- */
+.ix-nag, .ix-about { display: flex; flex-direction: column; padding: 4px 2px; font-size: 13px;
+  line-height: 1.55; color: var(--ix-text); }
+.ix-nag { gap: 10px; }
+.ix-nag p { margin: 0; }
+.ix-nag .mdi-shield-alert-outline { color: var(--ix-warn); font-size: 17px; vertical-align: -2px; }
+.ix-nag code, .ix-about code { padding: 1px 5px; border-radius: 4px; background: var(--ix-sunken);
+  font-family: var(--ix-mono); font-size: 12px; }
+.ix-nag-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+.ix-nag-primary { background: var(--ix-accent); border-color: var(--ix-accent); color: #fff; }
+[data-wapyt-theme="dark"] .ix-nag-primary { color: #0b1220; }
+
+.ix-about { gap: 14px; }
+.ix-about-head { display: flex; align-items: center; gap: 14px; }
+.ix-about-logo { width: 56px; height: 56px; border-radius: 50%; border: 1px solid var(--ix-border); }
+.ix-about-name { font-size: 20px; font-weight: 650; }
+.ix-about-version { font: 600 12px var(--ix-mono); color: var(--ix-accent);
+  background: var(--ix-accent-soft); padding: 2px 7px; border-radius: 999px; margin-left: 6px;
+  vertical-align: 3px; }
+.ix-about-sub { color: var(--ix-dim); font-size: 12.5px; }
+.ix-about-update { padding: 8px 10px; border-radius: 8px; background: var(--ix-sunken);
+  border: 1px solid var(--ix-border); }
+.ix-about-rdp { padding: 6px 10px; font-size: 13px; color: var(--ix-dim); }
+.ix-about-rdp[data-status="unreachable"] { color: var(--ix-warn); }
+.ix-about-update .mdi-arrow-up-circle, .ix-about-update .mdi-check-circle-outline { color: var(--ix-good); }
+.ix-about-update a, .ix-about-link .mdi { color: var(--ix-accent); }
+.ix-about-links { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.ix-about-link { display: flex; align-items: flex-start; gap: 9px; padding: 10px 12px;
+  border-radius: 8px; border: 1px solid var(--ix-border); background: var(--ix-raised);
+  text-decoration: none; color: var(--ix-text); }
+.ix-about-link:hover { border-color: var(--ix-accent); }
+.ix-about-link .mdi { font-size: 20px; line-height: 1.1; }
+.ix-about-link b { display: block; font-weight: 650; }
+.ix-about-link small { color: var(--ix-dim); font-size: 11.5px; }
+
+.ix-saved { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 8px; }
+.ix-saved-bar { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.ix-saved-path { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--ix-dim); font: 12px var(--ix-mono); }
+.ix-saved-table { flex: 1 1 auto; min-height: 0; }
+
+.ix-admin { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 10px; }
+.ix-admin-table { flex: 1 1 auto; min-height: 0; border: 1px solid var(--ix-border);
+  border-radius: 8px; overflow: hidden; }
+.ix-admin-form { flex: 0 0 auto; }

@@ -122,7 +122,7 @@ with sync_playwright() as p:
     check(not list(saved.rglob("*.part")), "no partial files left behind")
 
     # ── Saved files ──────────────────────────────────────────────────────────
-    page.click('.wapyt-toolbar-btn[data-id="saved"]')
+    page.click('.ix-nav[data-ix-nav="saved"]')
     page.wait_for_selector("#ix-saved-table td[data-column-id='name']", timeout=30000)
     names = page.eval_on_selector_all("#ix-saved-table td[data-column-id='name']",
                                       "els => els.map(e => e.innerText.trim())")

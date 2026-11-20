@@ -137,18 +137,25 @@ with sync_playwright() as p:
       n.title = 'Destination picking needs HTTPS.';
       n.dataset.shown = 'true';
     }""")
-    for width, want_text in ((1200, True), (640, False), (380, False)):
+    # The note is its own one-line row under the toolbar (2026-11-20), not a
+    # squeezed span inside it: the sentence stays, cut with an ellipsis, and
+    # the whole of it is the tooltip.
+    for width in (1200, 640, 380):
         set_width(pg, width)
         r = pg.evaluate("""() => {
           const n = document.querySelector('.ix-sftp-note');
+          const t = n.querySelector('.ix-sftp-note-text');
           const bar = document.querySelector('.ix-sftp-bar');
-          return { textShown: getComputedStyle(n.querySelector('.ix-sftp-note-text')).display !== 'none',
+          return { textShown: getComputedStyle(t).display !== 'none',
                    iconShown: n.querySelector('.ix-sftp-note-icon').getBoundingClientRect().width > 4,
+                   oneLine: n.getBoundingClientRect().height < 40,
+                   noteOverflow: n.scrollWidth - n.clientWidth,
                    overflow: bar.scrollWidth - bar.clientWidth };
         }""")
-        check(r["textShown"] == want_text and r["iconShown"] and r["overflow"] <= 0,
-              f"note at {width}px: {'sentence' if want_text else 'icon only'}, no overflow",
-              f"overflow={r['overflow']}")
+        check(r["textShown"] and r["iconShown"] and r["oneLine"]
+              and r["noteOverflow"] <= 0 and r["overflow"] <= 0,
+              f"note at {width}px: one line, no overflow",
+              f"{r}")
 
     set_width(pg, 380)
     pg.screenshot(path="/tmp/ix_narrow_pane_380.png")

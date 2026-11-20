@@ -106,11 +106,12 @@ UNSORTED = "Ungrouped"
 _THEME_KEY = "iguanaxterm:theme"
 _THEME_MODE_KEY = "iguanaxterm:mode"
 
+# Slate, to match the stylesheet's --ix-term-bg (the AI Ecosystem console).
 TERMINAL_THEME = TerminalTheme(
-    background="#1a1a2e",
-    foreground="#e0e0e0",
-    cursor="#00ff88",
-    selection_background="#33467c",
+    background="#0f172a",
+    foreground="#e2e8f0",
+    cursor="#60a5fa",
+    selection_background="#334155",
 )
 
 # Reconnect all: how long to wait for one pane before moving on, and the pause
@@ -135,13 +136,22 @@ _TOOLBAR_BUTTONS = (
     ("|", "", ""),
     ("connect", "Connect", "mdi-connection"),
     ("sftp", "Files", "mdi-folder-network"),
-    ("saved", "Saved files", "mdi-tray-arrow-down"),
-    ("|", "", ""),
-    ("users", "Users", "mdi-account-group"),
-    ("lists", "Site lists", "mdi-format-list-checks"),
-    ("password", "Password", "mdi-key"),
-    ("theme", "Theme", "mdi-palette"),
-    ("about", "About", "mdi-information-outline"),
+)
+
+# The sidebar's lower half, below the session tree: (heading, [(key, label,
+# icon, tooltip)]). The keys are the old header-toolbar ids and go through the
+# same _on_toolbar dispatch. "manage" is hidden for Users (#35).
+_SIDEBAR_NAV = (
+    ("manage", "Manage", (
+        ("users", "Users", "mdi-account-group-outline", "Accounts and roles"),
+        ("lists", "Site lists", "mdi-format-list-checks", "Share sites with people"),
+    )),
+    ("you", "You", (
+        ("saved", "Saved files", "mdi-tray-arrow-down", "Folders saved on the server"),
+        ("password", "Password", "mdi-key-outline", "Change your password"),
+        ("theme", "Theme", "mdi-palette-outline", "Light, dark and colours"),
+        ("about", "About", "mdi-information-outline", "Version, wiki and releases"),
+    )),
 )
 
 
@@ -255,6 +265,7 @@ class IguanaXterm(MainWindow):
         # Light or dark as last chosen in the theme editor (dark until then),
         # then any colours, radius and font saved there. Both live in this
         # browser's localStorage only.
+        self._load_css()
         self.set_theme(self._saved_mode())
         restore_theme(_THEME_KEY)
         # pytincture's bootstrap page leaves the tab title empty once the app
@@ -295,6 +306,23 @@ class IguanaXterm(MainWindow):
         _spawn(self._check_release(), "release check")
         _spawn(self._boot_workspace(), "workspace boot")
 
+    @staticmethod
+    def _load_css() -> None:
+        """
+        The app's stylesheet (static/iguanaxterm.css), linked once.
+
+        One file for everything wapyt does not draw, built on the AI Ecosystem
+        dashboard's tokens, instead of <style> strings injected per dialog.
+        The version is in the URL so a release's CSS is not served from cache.
+        """
+        if js.document.getElementById("ix-css"):
+            return
+        link = js.document.createElement("link")
+        link.id = "ix-css"
+        link.rel = "stylesheet"
+        link.href = f"/static/iguanaxterm.css?v={VERSION}"
+        js.document.head.appendChild(link)
+
     async def _boot_workspace(self) -> None:
         # The layout names session ids, so the session list has to be in hand
         # before it can be validated against -- hence one coroutine rather than
@@ -334,16 +362,18 @@ class IguanaXterm(MainWindow):
             '<div class="ix-sidebar">'
             '  <div class="ix-brand">'
             # 128px WebP cropped to the head: the full portrait is 783KB and
-            # would be fetched in its entirety to render a 40px avatar.
+            # would be fetched in its entirety to render a 36px avatar.
             '    <img class="ix-brand-logo" src="/static/el_iguana_avatar.webp"'
-            '         alt="" width="40" height="40" decoding="async">'
+            '         alt="" width="36" height="36" decoding="async">'
             '    <div class="ix-brand-text">'
             '      <span class="ix-brand-name">IguanaXterm</span>'
-            '      <span class="ix-brand-sub">SSH &middot; Telnet &middot; SFTP &middot; FTP &middot; VNC</span>'
+            '      <span class="ix-brand-sub">SSH &middot; Telnet &middot; SFTP &middot; FTP &middot; VNC &middot; RDP</span>'
             '    </div>'
             '  </div>'
+            '  <div class="ix-side-head"><span class="ix-heading">Sessions</span></div>'
             '  <div class="ix-sidebar-tree" id="ix-tree-host"></div>'
-            f"</div><style>{_SIDEBAR_CSS}</style>"
+            f'  <nav class="ix-side-nav">{self._sidebar_nav_html()}</nav>'
+            "</div>"
         )
 
         self.tree = Tree(
@@ -387,6 +417,9 @@ class IguanaXterm(MainWindow):
             '  <div class="ix-host" id="ix-grid-host" hidden>'
             '    <div class="grid-stack"></div>'
             '  </div>'
+            # The home screen: shown by CSS alone whenever no pane is open
+            # (no tab panel and no tile), so there is no state to keep in step.
+            '  <div class="ix-home" id="ix-home"></div>'
             "</div>"
         )
 
@@ -396,13 +429,113 @@ class IguanaXterm(MainWindow):
         )
         self.tabs.on_change(self._on_tab_change)
         self.tabs.on_close(self._on_tab_close)
+        self._render_home()
 
-        # The hint lives on the empty panel area rather than in a placeholder
-        # tab, so it comes back on its own when the last tab is closed. The pane
-        # and SFTP rules go up once here rather than with every pane built.
-        hint = js.document.createElement("style")
-        hint.textContent = _WORKSPACE_CSS + _GRID_CSS + _PANE_CSS + _SFTP_CSS + _ABOUT_CSS
-        js.document.head.appendChild(hint)
+    @staticmethod
+    def _sidebar_nav_html() -> str:
+        """The sidebar's lower half: Manage and You, as plain buttons."""
+        esc = html.escape
+        parts = []
+        for group, heading, entries in _SIDEBAR_NAV:
+            parts.append(f'<span class="ix-heading" data-ix-nav-group="{group}">{esc(heading)}</span>')
+            for key, label, icon, tip in entries:
+                parts.append(
+                    f'<button type="button" class="ix-nav" data-ix-nav="{key}"'
+                    f' data-ix-nav-group="{group}" title="{esc(tip)}">'
+                    f'<span class="mdi {icon}"></span><span>{esc(label)}</span></button>'
+                )
+        return "".join(parts)
+
+    def _render_home(self) -> None:
+        """
+        The workspace's home screen: saved sessions as cards, one section per
+        folder, like the AI Ecosystem dashboard's frontend cards. Re-rendered
+        whenever the session list or the person's role changes.
+        """
+        home = js.document.getElementById("ix-home")
+        if not home:
+            return
+        esc = html.escape
+        role = self._me.get("role")
+        can_manage = role in ("admin", "power")
+        name = self._me.get("username") or ""
+
+        groups: dict[str, list[dict]] = {}
+        for session in self._sessions:
+            key = (f"Shared · {session.get('list_name') or 'Shared'}"
+                   if session.get("shared") else session.get("folder") or UNSORTED)
+            groups.setdefault(key, []).append(session)
+
+        def _card(session: dict) -> str:
+            sid = int(session["id"])
+            caps = self._caps(session)
+            kind = str(session.get("type") or "ssh")
+            user = session.get("username") or ""
+            target = f"{user}@{session.get('host', '')}" if user else str(session.get("host", ""))
+            if session.get("port"):
+                target = f"{target}:{session['port']}"
+            desc = session.get("description") or ""
+            if session.get("shared"):
+                desc = f"Shared by {session.get('owner') or 'someone'}" + (f" · {desc}" if desc else "")
+            connect_label = "Open" if not (caps["terminal"] or caps["desktop"]) else "Connect"
+            buttons = [
+                f'<button type="button" class="ix-btn ix-primary" data-home-connect="{sid}">'
+                f'<span class="mdi mdi-connection"></span>{connect_label}</button>'
+            ]
+            if caps["files"] and (caps["terminal"] or caps["desktop"]):
+                buttons.append(
+                    f'<button type="button" class="ix-btn" data-home-files="{sid}">'
+                    '<span class="mdi mdi-folder-network-outline"></span>Files</button>')
+            if session.get("editable"):
+                buttons.append(
+                    f'<button type="button" class="ix-btn ix-ghost" data-home-edit="{sid}"'
+                    ' title="Edit this session"><span class="mdi mdi-pencil-outline"></span></button>')
+            return (
+                f'<div class="ix-card{" shared" if session.get("shared") else ""}"'
+                f' data-home-card="{sid}" title="Double-click to connect">'
+                '<div class="ix-card-head">'
+                f'<span class="ix-card-icon mdi {session_icon(kind)}"></span>'
+                '<div class="ix-card-titles">'
+                f'<div class="ix-card-title">{esc(str(session.get("name", "")))}</div>'
+                f'<div class="ix-card-sub">{esc(target)}</div></div>'
+                f'<span class="ix-pill{" shared" if session.get("shared") else ""}">{esc(kind)}</span>'
+                '</div>'
+                + (f'<p class="ix-card-desc">{esc(desc)}</p>' if desc else "")
+                + f'<div class="ix-card-actions">{"".join(buttons)}</div></div>'
+            )
+
+        sections = []
+        own = sorted((k for k in groups if not k.startswith("Shared · ")), key=str.lower)
+        shared = sorted((k for k in groups if k.startswith("Shared · ")), key=str.lower)
+        for key in own + shared:
+            items = groups[key]
+            sections.append(
+                '<section class="ix-home-section"><div class="ix-section-head">'
+                f'<h2>{esc(key)}</h2><span class="ix-dim">{len(items)} '
+                f'session{"s" if len(items) != 1 else ""}</span></div>'
+                f'<div class="ix-grid">{"".join(_card(s) for s in items)}</div></section>'
+            )
+        if not sections:
+            message_text = (
+                "No saved sessions yet. Use <b>New</b> in the toolbar to add one."
+                if can_manage else
+                "No sites have been shared with you yet. Ask your administrator."
+            )
+            sections.append(
+                '<div class="ix-empty"><span class="mdi mdi-server-network-outline"></span>'
+                f"{message_text}</div>"
+            )
+        greeting = f"Welcome back, {esc(name)}" if name else "Sessions"
+        home.innerHTML = (
+            '<div class="ix-home-page">'
+            f'<div class="ix-home-head"><h1>{greeting}</h1>'
+            f'<span class="ix-dim">{len(self._sessions)} saved '
+            f'session{"s" if len(self._sessions) != 1 else ""}</span></div>'
+            + "".join(sections)
+            + '<p class="ix-tip">Tip: double-click a card, or a session in the sidebar, to '
+            "connect. Tabs and Tiles in the toolbar switch how open connections are laid out.</p>"
+            "</div>"
+        )
 
     def _toolbar_config(self) -> ToolbarConfig:
         items: list = []
@@ -446,6 +579,23 @@ class IguanaXterm(MainWindow):
             # The header toolbar is a wapyt Toolbar with its own on_click; this
             # one delegated listener covers the per-tab SFTP toolbars and the
             # pane chrome, so each new tab does not add a document-level handler.
+            nav = event.target.closest("[data-ix-nav]")
+            if nav:
+                self._on_toolbar(nav.dataset.ixNav)
+                return
+            home_connect = event.target.closest("[data-home-connect]")
+            if home_connect:
+                self._connect(f"sess_{home_connect.dataset.homeConnect}")
+                return
+            home_files = event.target.closest("[data-home-files]")
+            if home_files:
+                self._open_sftp(int(home_files.dataset.homeFiles))
+                return
+            home_edit = event.target.closest("[data-home-edit]")
+            if home_edit:
+                _spawn(self._session_editor(int(home_edit.dataset.homeEdit)), "session editor")
+                return
+
             sftp_button = event.target.closest("[data-sftp]")
             if sftp_button:
                 self._sftp_click(sftp_button.dataset.sftp, sftp_button.dataset.tab)
@@ -509,6 +659,14 @@ class IguanaXterm(MainWindow):
         self._toolbar_proxy = create_proxy(_on_click)
         js.document.addEventListener("click", self._toolbar_proxy)
 
+        def _on_dblclick(event) -> None:
+            card = event.target.closest("[data-home-card]")
+            if card and not event.target.closest("button"):
+                self._connect(f"sess_{card.dataset.homeCard}")
+
+        self._dblclick_proxy = create_proxy(_on_dblclick)
+        js.document.addEventListener("dblclick", self._dblclick_proxy)
+
         def _on_key(event) -> None:
             # Escape restores a maximized tile -- but never when the focus is
             # in a terminal. Escape belongs to the remote there: it is how you
@@ -540,8 +698,11 @@ class IguanaXterm(MainWindow):
         self._toolbar.set_text("user", f"{self._me.get('username', '')}{suffix}")
         # Users can't set anyone up (#35) or change sites (#36).
         can_manage = role in ("admin", "power")
-        for button in ("users", "lists", "new", "edit", "delete"):
+        for button in ("new", "edit", "delete"):
             self._toolbar.set_hidden(button, not can_manage)
+        for element in js.document.querySelectorAll('[data-ix-nav-group="manage"]'):
+            element.hidden = not can_manage
+        self._render_home()
         if not can_manage:
             self.tree.set_empty_text(
                 "No sites have been shared with you yet.\nAsk your administrator."
@@ -684,7 +845,7 @@ class IguanaXterm(MainWindow):
             '<button type="button" class="ix-sftp-btn" data-nag="later">Later</button>'
             '<button type="button" class="ix-sftp-btn ix-nag-primary" data-nag="change">'
             '<span class="mdi mdi-key"></span><span>Change password</span></button>'
-            f"</div></div><style>{_NAG_CSS}</style>"
+            "</div></div>"
         )
 
         def _on_click(event) -> None:
@@ -781,6 +942,7 @@ class IguanaXterm(MainWindow):
                 )
             )
         self.tree.set_items(items)
+        self._render_home()
 
     @staticmethod
     def _session_tooltip(session: dict) -> str:
@@ -2113,10 +2275,10 @@ class IguanaXterm(MainWindow):
             f'            title="Re-read this directory.">'
             f'      <span class="mdi mdi-refresh"></span><span>Refresh</span></button>'
             f'    <span class="ix-sftp-spacer"></span>'
-            f'    <span class="ix-sftp-note" id="note-{tab_id}">'
-            f'      <span class="mdi mdi-alert ix-sftp-note-icon"></span>'
-            f'      <span class="ix-sftp-note-text"></span></span>'
             f'  </div>'
+            f'  <div class="ix-sftp-note" id="note-{tab_id}">'
+            f'    <span class="mdi mdi-alert-outline ix-sftp-note-icon"></span>'
+            f'    <span class="ix-sftp-note-text"></span></div>'
             f'  <div class="ix-crumbs" id="crumbs-{tab_id}"></div>'
             f'  <div class="ix-sftp-table" id="table-{tab_id}"></div>'
             f'  <div class="ix-queue" id="queue-{tab_id}" hidden>'
@@ -2525,7 +2687,7 @@ class IguanaXterm(MainWindow):
             '      <span class="mdi mdi-delete"></span><span>Delete</span></button>'
             '  </div>'
             '  <div class="ix-saved-table" id="ix-saved-table"></div>'
-            f"</div><style>{_SAVED_CSS}</style>"
+            "</div>"
         )
         table = DataTable(
             DataTableConfig(
@@ -3384,7 +3546,7 @@ class IguanaXterm(MainWindow):
             f'<div class="ix-admin">'
             f'  <div class="ix-admin-table" id="ix-lists-table"></div>'
             f'  <div class="ix-admin-form" id="ix-lists-form"></div>'
-            f"</div><style>{_ADMIN_CSS}</style>"
+            "</div>"
         )
         columns = [ColumnConfig(id="name", header="Name")]
         if is_admin:
@@ -3637,7 +3799,7 @@ class IguanaXterm(MainWindow):
             f'<div class="ix-admin">'
             f'  <div class="ix-admin-table" id="ix-admin-table"></div>'
             f'  <div class="ix-admin-form" id="ix-admin-form"></div>'
-            f"</div><style>{_ADMIN_CSS}</style>"
+            "</div>"
         )
 
         columns = [
@@ -3817,280 +3979,15 @@ class IguanaXterm(MainWindow):
         message.toast(text, kind=kind)
 
 
-_NAG_CSS = """
-.ix-nag{display:flex;flex-direction:column;gap:10px;padding:4px 2px;font:13px/1.55 system-ui,sans-serif;color:#cbd5f5;}
-.ix-nag p{margin:0;}
-.ix-nag .mdi-shield-alert-outline{color:#fbbf24;font-size:17px;vertical-align:-2px;}
-.ix-nag code{padding:1px 5px;border-radius:4px;background:rgba(148,163,184,.15);color:#fde68a;}
-.ix-nag-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:6px;}
-.ix-nag-primary{background:#047857;border-color:#10b981;color:#ecfdf5;}
-"""
 
 
-_SAVED_CSS = """
-.ix-saved{display:flex;flex-direction:column;height:100%;min-height:0;gap:8px;}
-.ix-saved-bar{display:flex;align-items:center;gap:6px;flex:0 0 auto;}
-.ix-saved-path{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
-  white-space:nowrap;color:#94a3b8;font:12px ui-monospace,Menlo,Consolas,monospace;}
-.ix-saved-table{flex:1 1 auto;min-height:0;}
-"""
 
 
-_WORKSPACE_CSS = """
-/* :empty matches when the tab strip holds no panels — pseudo-elements do not
-   count as children — so the hint appears with no state to track. */
-.wapyt-tabwidget-panels:empty::after{
-  content:"Double-click a session in the sidebar to open a terminal.";
-  display:flex;align-items:center;justify-content:center;height:100%;
-  color:#64748b;font:14px system-ui,sans-serif;text-align:center;padding:0 24px;
-}
-.wapyt-tabwidget-tabs:empty{display:none;}
-"""
 
-_ABOUT_CSS = """
-.ix-about{display:flex;flex-direction:column;gap:14px;padding:4px 2px;font:13px/1.5 system-ui,sans-serif;color:#cbd5f5;}
-.ix-about-head{display:flex;align-items:center;gap:14px;}
-.ix-about-logo{width:56px;height:56px;border-radius:50%;}
-.ix-about-name{font-size:20px;font-weight:600;color:#e2e8f0;}
-.ix-about-version{font:600 13px ui-monospace,Menlo,Consolas,monospace;color:#6ee7b7;margin-left:4px;}
-.ix-about-sub{color:#94a3b8;font-size:12px;}
-.ix-about-update{padding:8px 10px;border-radius:6px;background:#111827;border:1px solid #334155;}
-.ix-about-rdp{padding:6px 10px;font-size:13px;color:#cbd5e1;}
-.ix-about-rdp[data-status="unreachable"]{color:#fbbf24;}
-.ix-about-update .mdi-arrow-up-circle{color:#34d399;}
-.ix-about-update a,.ix-about-link{color:#6ee7b7;}
-.ix-about-links{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
-.ix-about-link{display:flex;align-items:flex-start;gap:9px;padding:9px 10px;border-radius:6px;
-  border:1px solid #334155;text-decoration:none;}
-.ix-about-link:hover{background:#1f2937;}
-.ix-about-link .mdi{font-size:20px;line-height:1.1;}
-.ix-about-link b{display:block;color:#e2e8f0;font-weight:600;}
-.ix-about-link small{color:#94a3b8;font-size:11.5px;}
-"""
 
-_SIDEBAR_CSS = """
-.ix-sidebar{display:flex;flex-direction:column;height:100%;min-height:0;}
-.ix-brand{display:flex;align-items:center;gap:10px;padding:10px 12px;flex:0 0 auto;
-  background:#111827;border-bottom:1px solid #1f2937;}
-.ix-brand-logo{flex:0 0 auto;width:40px;height:40px;border-radius:50%;
-  object-fit:cover;border:1px solid #334155;background:#0f172a;}
-.ix-brand-text{display:flex;flex-direction:column;min-width:0;line-height:1.25;}
-.ix-brand-name{font:600 14px system-ui,sans-serif;color:#e2e8f0;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.ix-brand-sub{font:10.5px system-ui,sans-serif;color:#64748b;letter-spacing:.03em;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.ix-sidebar-tree{flex:1 1 auto;min-height:0;}
-"""
 
-_GRID_CSS = """
-.ix-workspace{position:relative;height:100%;min-height:0;}
-.ix-host{position:absolute;inset:0;min-height:0;}
-.ix-host[hidden]{display:none;}
-#ix-grid-host{overflow:auto;background:#0b1220;}
-#ix-grid-host .grid-stack{min-height:100%;}
-/* The item content is the pane's parent, so it needs the same min-height:0
-   discipline as a layout cell or a terminal pushes it wider than its cell. */
-.grid-stack-item-content{display:flex;flex-direction:column;min-width:0;
-  min-height:0;overflow:hidden;background:#0f172a;border:1px solid #1f2937;
-  border-radius:8px;}
-.grid-stack-item-content .ix-pane{height:100%;}
-/* Grip and close only mean anything while tiled: in tabbed mode the tab strip
-   already moves and closes a pane. */
-.ix-pane-grip,.ix-pane-close,.ix-pane-max{display:none;}
-.grid-stack .ix-pane-grip{display:inline-flex;align-items:center;color:#475569;
-  cursor:move;font-size:16px;padding:0 2px;}
-.grid-stack .ix-pane-grip:hover{color:#94a3b8;}
-.grid-stack .ix-pane-close{display:inline-flex;align-items:center;
-  justify-content:center;width:20px;height:20px;padding:0;color:#64748b;
-  background:transparent;border:none;border-radius:4px;cursor:pointer;
-  font-size:16px;line-height:1;}
-.grid-stack .ix-pane-close:hover{background:#7f1d1d;color:#fecaca;}
-.grid-stack .ix-pane-max{display:inline-flex;align-items:center;
-  justify-content:center;width:20px;height:20px;padding:0;color:#64748b;
-  background:transparent;border:none;border-radius:4px;cursor:pointer;
-  font-size:14px;}
-.grid-stack .ix-pane-max:hover{background:#1f2937;color:#cbd5f5;}
-.grid-stack .ix-pane-max[aria-pressed="true"]{color:#38bdf8;}
 
-/* Maximize is presentational: the tile is overlaid on the grid rather than
-   resized in it, so its neighbours keep their positions and the saved layout
-   is untouched. GridStack sets width/height inline as calc() over its CSS
-   variables, hence !important. The grid is position:relative and stretched to
-   the host by min-height, so inset:0 fills the workspace. */
-#ix-grid-host .grid-stack-item[data-maximized]{
-  position:absolute !important;
-  inset:0 !important;
-  width:auto !important;
-  height:auto !important;
-  margin:0 !important;
-  transform:none !important;
-  z-index:30;
-}
-/* Dragging or resizing a tile that is pretending to fill the workspace would
-   move it in the grid model behind the overlay. */
-#ix-grid-host .grid-stack-item[data-maximized] .ui-resizable-handle,
-#ix-grid-host .grid-stack-item[data-maximized] .ix-pane-grip{display:none;}
-.ix-reconnect{display:flex;flex-direction:column;align-items:center;
-  justify-content:center;gap:6px;height:100%;padding:20px;text-align:center;}
-.ix-reconnect-icon{font-size:30px;color:#334155;}
-.ix-reconnect-name{color:#e2e8f0;font:600 14px system-ui,sans-serif;}
-.ix-reconnect-host{color:#64748b;font:11px ui-monospace,Menlo,Consolas,monospace;}
-.ix-reconnect-note{max-width:42ch;color:#fbbf24;font:12px/1.45 system-ui,sans-serif;}
-.ix-reconnect-btn{display:inline-flex;align-items:center;gap:6px;margin-top:8px;
-  padding:7px 15px;color:#e2e8f0;background:#1e293b;border:1px solid #334155;
-  border-radius:7px;cursor:pointer;font:13px system-ui,sans-serif;}
-.ix-reconnect-btn:hover{background:#334155;border-color:#475569;}
-"""
 
-_PANE_CSS = """
-.ix-pane{display:flex;flex-direction:column;height:100%;min-height:0;
-  container-type:inline-size;}
-.ix-pane-tabs{display:flex;align-items:center;gap:2px;flex:0 0 auto;
-  padding:4px 6px;background:#0b1220;border-bottom:1px solid #1f2937;}
-.ix-pane-tab{display:inline-flex;align-items:center;gap:6px;padding:4px 11px;
-  color:#94a3b8;background:transparent;border:1px solid transparent;
-  border-radius:6px;cursor:pointer;font:12px system-ui,sans-serif;}
-.ix-pane-tab:hover:not(:disabled){background:#1f2937;color:#cbd5f5;}
-.ix-pane-tab[aria-selected="true"]{background:#1e293b;color:#e2e8f0;
-  border-color:#334155;}
-.ix-pane-tab:disabled{opacity:.4;cursor:not-allowed;}
-.ix-pane-tab .mdi{font-size:15px;}
-.ix-pane-spacer{flex:1 1 auto;}
-/* Tiled only, like the grip. Shrinks before anything else in the strip, and
-   outlives the host label in a narrow tile since it is the one that says
-   which connection this is. */
-.ix-pane-name{display:none;}
-.grid-stack .ix-pane-name{display:inline-flex;align-items:center;gap:5px;
-  flex:0 1 auto;min-width:0;margin:0 8px 0 2px;color:#e2e8f0;
-  font:600 12px system-ui,sans-serif;}
-.ix-pane-name .mdi{font-size:14px;color:#94a3b8;flex:0 0 auto;}
-.ix-pane-name-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.ix-pane-host{color:#64748b;font:11px ui-monospace,Menlo,Consolas,monospace;
-  padding-right:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  max-width:40%;}
-/* Both panels are always mounted and stacked; only visibility changes, so the
-   terminal's host element is created once and never replaced. */
-.ix-pane-body{position:relative;flex:1 1 auto;min-height:0;}
-.ix-pane-panel{position:absolute;inset:0;min-width:0;min-height:0;}
-.ix-pane-panel[hidden],.ix-pane-tab[hidden]{display:none;}
-/* A remote desktop: noVNC's canvas scales to fill this, letterboxed. */
-.ix-vnc{position:absolute;inset:0;background:#0b1220;overflow:hidden;outline:none;}
-.ix-rdp{position:absolute;inset:0;background:#0b1220;overflow:hidden;outline:none;cursor:default;}
-.ix-rdp .ix-rdp-display{position:absolute;}
-.ix-rdp:focus-visible{box-shadow:inset 0 0 0 2px var(--wapyt-accent,#3b82f6);}
-.ix-pane-cad{display:inline-flex;align-items:center;gap:5px;margin-right:6px;
-  padding:3px 9px;color:#94a3b8;background:transparent;border:1px solid #334155;
-  border-radius:6px;cursor:pointer;font:11px system-ui,sans-serif;white-space:nowrap;}
-.ix-pane-cad:hover{background:#1f2937;color:#e2e8f0;}
-/* display:inline-flex above would otherwise beat the hidden attribute. */
-.ix-pane-cad[hidden]{display:none;}
-.ix-pane-cad .mdi{font-size:14px;}
-/* A narrow pane drops the tab labels to icons. */
-@container (max-width: 420px){
-  .ix-pane-tab span:not(.mdi){display:none;}
-  .ix-pane-host{display:none;}
-  .ix-pane-cad span:not(.mdi){display:none;}
-}
-"""
-
-_SFTP_CSS = """
-.ix-sftp{display:flex;flex-direction:column;height:100%;min-height:0;}
-.ix-sftp-bar{display:flex;align-items:center;gap:4px;padding:6px 8px;
-  background:#111827;border-bottom:1px solid #1f2937;}
-.ix-sftp-btn{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;
-  color:#cbd5f5;background:transparent;border:1px solid transparent;border-radius:6px;
-  cursor:pointer;font:12px system-ui,sans-serif;}
-.ix-sftp-btn:hover{background:#1f2937;border-color:#334155;}
-.ix-sftp-btn .mdi{font-size:15px;}
-.ix-sftp-sep{width:1px;height:18px;margin:0 5px;background:#334155;}
-.ix-sftp-spacer{flex:1 1 auto;}
-.ix-sftp-note{display:none;align-items:center;gap:5px;color:#fbbf24;
-  font:11px system-ui,sans-serif;padding-right:6px;max-width:46ch;
-  text-align:right;line-height:1.3;}
-.ix-sftp-note[data-shown]{display:inline-flex;}
-.ix-sftp-note-icon{font-size:14px;flex:0 0 auto;}
-/* A short grid cell cannot spare 210px of queue. The percentage resolves
-   because .ix-sftp sits in an absolutely positioned pane panel, so its height
-   is definite. */
-.ix-queue{flex:0 0 auto;max-height:min(210px, 45%);display:flex;
-  flex-direction:column;background:#0f172a;border-top:1px solid #1f2937;}
-.ix-queue[hidden]{display:none;}
-.ix-queue-head{display:flex;align-items:center;justify-content:space-between;
-  padding:5px 10px;border-bottom:1px solid #1f2937;}
-.ix-queue-title{font:600 11px system-ui,sans-serif;color:#94a3b8;
-  letter-spacing:.04em;text-transform:uppercase;}
-.ix-queue-clear{padding:2px 8px;color:#94a3b8;background:transparent;border:none;
-  border-radius:4px;cursor:pointer;font:11px system-ui,sans-serif;}
-.ix-queue-clear:hover{background:#1f2937;color:#cbd5f5;}
-.ix-queue-rows{overflow:auto;min-height:0;}
-.ix-queue-row{display:flex;align-items:center;gap:8px;padding:5px 10px;
-  font:12px system-ui,sans-serif;color:#cbd5f5;}
-.ix-queue-row .mdi{font-size:14px;opacity:.7;flex:0 0 auto;}
-/* The row's wapyt ProgressBar. Widths are set here rather than with
-   label_width/value_width (inline styles), so the narrow-pane container
-   query below can still shrink them. */
-.ix-queue-progress{flex:1 1 auto;min-width:0;}
-.ix-queue-progress .wapyt-progress{color:#cbd5f5;}
-.ix-queue-progress .wapyt-progress-label{flex:0 1 240px;max-width:none;}
-.ix-queue-progress .wapyt-progress-track{min-width:60px;}
-.ix-queue-progress .wapyt-progress-value{min-width:96px;text-align:right;color:#94a3b8;
-  font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.ix-queue-cancel{flex:0 0 auto;width:20px;height:20px;padding:0;color:#94a3b8;
-  background:transparent;border:none;border-radius:4px;cursor:pointer;font-size:14px;}
-.ix-queue-cancel:hover{background:#1f2937;color:#f87171;}
-.ix-queue-row[data-state] .ix-queue-cancel{visibility:hidden;}
-/* A paused download can still be discarded. */
-.ix-queue-row[data-state="paused"] .ix-queue-cancel{visibility:visible;}
-.ix-queue-resume{flex:0 0 auto;width:20px;height:20px;padding:0;color:#38bdf8;
-  background:transparent;border:0;border-radius:4px;cursor:pointer;}
-.ix-queue-resume:hover{background:#1f2937;}
-.ix-queue-row[data-state="failed"] .wapyt-progress-value{color:#f87171;}
-.ix-queue-row[data-state="cancelled"]{opacity:.55;}
-/* nowrap + scroll: wrapping turned a deep path into four stacked lines that
-   ate the listing in a narrow pane. */
-.ix-crumbs{display:flex;flex-wrap:nowrap;align-items:center;gap:2px;
-  padding:6px 8px;background:#111827;border-bottom:1px solid #1f2937;
-  overflow-x:auto;scrollbar-width:none;}
-.ix-crumbs::-webkit-scrollbar{height:0;}
-.ix-crumb{flex:0 0 auto;max-width:22ch;overflow:hidden;text-overflow:ellipsis;
-  white-space:nowrap;}
-.ix-crumb{padding:3px 8px;color:#cbd5f5;background:transparent;border:none;
-  border-radius:4px;cursor:pointer;font:12px system-ui,sans-serif;}
-.ix-crumb:hover{background:#1f2937;}
-.ix-crumb-up{color:#38bdf8;}
-.ix-sftp-table{flex:1 1 auto;min-height:0;}
-
-/* Narrow panes. The natural toolbar is 469px wide, so it starts clipping just
-   under that; the tiers below give it somewhere to go. Container queries, not
-   media queries -- a pane is narrow because the grid cell is narrow, which has
-   nothing to do with the size of the window. */
-@container (max-width: 700px){
-  /* Keep the warning, drop its sentence; the icon carries it as a tooltip. */
-  .ix-sftp-note-text{display:none;}
-}
-/* Below ~500px the fixed columns (icon 34 + size 100 + modified 150 + perms
-   80, plus the checkbox) squeezed Name to zero and the filename -- the one
-   column that matters -- disappeared behind a horizontal scrollbar. Secondary
-   columns give way instead; they are still in the context menu and the
-   tooltip. */
-@container (max-width: 700px){
-  .ix-sftp-table th[data-column-id="permissions"],
-  .ix-sftp-table td[data-column-id="permissions"]{display:none;}
-}
-@container (max-width: 560px){
-  .ix-sftp-table th[data-column-id="modified"],
-  .ix-sftp-table td[data-column-id="modified"]{display:none;}
-  .ix-sftp-btn span:not(.mdi){display:none;}
-  .ix-sftp-btn{padding:5px 7px;}
-  .ix-sftp-bar{gap:2px;padding:6px;}
-  .ix-sftp-sep{margin:0 3px;}
-}
-@container (max-width: 420px){
-  .ix-crumb{max-width:12ch;}
-  .ix-queue-progress .wapyt-progress-label{flex:0 1 120px;}
-  .ix-queue-progress .wapyt-progress-value{min-width:64px;}
-}
-"""
 
 # The session editor's RDP-only fields (#56), shown for RDP sites alone.
 _RDP_FIELDS = ("domain", "security", "resize", "keyboard", "console", "audio",
@@ -4107,10 +4004,4 @@ _ACCESS_REMOVED = "Access to this site was removed."
 # services/roles.py LABELS. Copied, not imported: that module is server-side.
 _ROLE_LABELS = {"admin": "Admin", "power": "Power User", "user": "User"}
 
-_ADMIN_CSS = """
-.ix-admin{display:flex;flex-direction:column;height:100%;min-height:0;gap:10px;}
-.ix-admin-table{flex:1 1 auto;min-height:0;border:1px solid var(--wapyt-border);
-  border-radius:6px;overflow:hidden;}
-.ix-admin-form{flex:0 0 auto;}
-"""
 

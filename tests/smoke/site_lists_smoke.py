@@ -60,7 +60,11 @@ def sign_in(browser, user, password):
 
 
 def toolbar(page, button):
-    page.click(f'.wapyt-toolbar-btn[data-id="{button}"]')
+    """A header button, or one of the sidebar's (Users, Site lists, ...)."""
+    if button in ("users", "lists", "saved", "password", "theme", "about"):
+        page.click(f'.ix-nav[data-ix-nav="{button}"]')
+    else:
+        page.click(f'.wapyt-toolbar-btn[data-id="{button}"]')
 
 
 def modal_form(page):
@@ -255,6 +259,11 @@ with sync_playwright() as p:
     check("Shared · Lab servers" in ula_tree and "lab-box" in ula_tree
           and "secret-box" not in ula_tree, "ula's tree: Shared · Lab servers only",
           ula_tree.replace("\n", " | "))
+    # The sidebar's Manage group (Users, Site lists) is for Power Users and up.
+    manage = 'document.querySelectorAll(\'.ix-nav[data-ix-nav-group="manage"]:not([hidden])\').length'
+    check(ula.evaluate(manage) == 0 and admin.evaluate(manage) == 2,
+          "Manage (Users, Site lists) hidden for a User, shown for an Admin",
+          f"ula={ula.evaluate(manage)} admin={admin.evaluate(manage)}")
     items = menu_for(ula, "lab-box")
     check(items == ["Connect"], "ula's menu: Connect only (no files, no edit)", items)
     pane = open_terminal(ula, "lab-box")

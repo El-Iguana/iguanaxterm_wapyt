@@ -203,7 +203,21 @@ def _save_dialogs_usable() -> bool:
         override = None
     if override in ("on", "off"):
         return override == "on"
-    return not _local_is_linux()
+    return _in_desktop_app() or not _local_is_linux()
+
+
+def _in_desktop_app() -> bool:
+    """
+    Whether this page is in IguanaXterm's Electron window (``desktop/``).
+
+    That window answers Chromium's "system folder" refusals itself (it allows
+    the user's home, ``/var/home`` included), so the save dialogs work there
+    on Linux too.
+    """
+    try:
+        return "Electron/" in str(js.navigator.userAgent)
+    except Exception:
+        return False
 
 
 def _recovered(outcome) -> str:

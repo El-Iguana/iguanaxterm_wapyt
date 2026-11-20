@@ -104,7 +104,8 @@ Why bother when the browser works:
   under the home folder (both `/home/x` and `/var/home/x`) that Chromium
   refuses as "system files"; elsewhere it asks. The page sees `Electron/` in
   the user agent and `_in_desktop_app()` turns `_save_dialogs_usable()` back on.
-  The native dialog itself can't be driven headless: hand-test a download.
+  The native dialog itself can't be driven headless; hand-tested on Bazzite
+  (2026-11-20): an upload and a download to a folder under `/var/home` worked.
 - **Keys reach the terminal.** No menu bar; only F5 (reload), F12 and
   Ctrl+Shift+I (devtools) are taken. Not Ctrl+R, which LizardKing uses for
   reload: it is bash's history search.

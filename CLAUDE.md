@@ -64,6 +64,8 @@ appcode/                # pytincture modules_path
   wapyt-99.99.99-*.whl  #   dev wheel the BROWSER installs (not the venv copy)
 tests/                  # CPython unit tests for the pure modules
 tools/windows/          # native Windows install: launcher, build.py, Inno Setup
+desktop/                # Electron window: the running server, else a local service.py
+  install.sh            #   npm ci + Electron binary + ~/.local/share menu entry and icon
 ```
 
 ## Running
@@ -79,6 +81,49 @@ Podman, `compose.host-network.yaml` on Linux, `compose.downloads.yaml` (Docker)
 or a `podman run` recipe (Podman on Linux) to save folders to a host folder.
 `manage.py` is the admin CLI (`health`, `probe HOST PORT`, `users`,
 `set-role USER admin|power|user`, `reset-password`).
+
+### Desktop app (Electron, 2026-11-20)
+
+The LizardKing pattern with a front step. `desktop/install.sh` installs it
+(menu entry runs `desktop/node_modules/electron/dist/electron desktop`, and a
+"Start a local server" action adds `--local`). `main.js` picks a mode:
+
+| Mode | When | What |
+|---|---|---|
+| window | `GET <origin>/healthz` answers | Opens that server in the window; quitting leaves it running. Sessions, users and RDP are the container's. |
+| local | nothing answers, or `--local` / URL `local` | Starts `service.py` from this checkout on a free 127.0.0.1 port (`.venv/bin/python`, else `uv run`), data in the launcher's folder (`~/.local/share/iguanaxterm`), folder saves to `~/Downloads/IguanaXterm`. Quitting (or SIGTERM to Electron) stops it. RDP only with `GANXTERM_GUACD` set. |
+
+The URL is `--url=`, else `IGUANAXTERM_URL`, else `"url"` in
+`~/.config/IguanaXterm/config.json` (Electron's userData), else
+`http://127.0.0.1:8765/iguanaxterm`.
+
+Why bother when the browser works:
+
+- **The save dialogs work on Linux in the window.** Electron's
+  `file-system-access-restricted` session event lets `main.js` allow paths
+  under the home folder (both `/home/x` and `/var/home/x`) that Chromium
+  refuses as "system files"; elsewhere it asks. The page sees `Electron/` in
+  the user agent and `_in_desktop_app()` turns `_save_dialogs_usable()` back on.
+  The native dialog itself can't be driven headless: hand-test a download.
+- **Keys reach the terminal.** No menu bar; only F5 (reload), F12 and
+  Ctrl+Shift+I (devtools) are taken. Not Ctrl+R, which LizardKing uses for
+  reload: it is bash's history search.
+
+Traps:
+
+- **Local mode sets `GANXTERM_ADMIN_USER=admin` and an empty
+  `GANXTERM_ADMIN_PASS`** instead of deleting them: `service.py` fills unset
+  variables from the checkout's `.env`, and a developer `.env` has its own
+  admin, so a "deleted" variable came back and `change_me` failed.
+- **Playwright over CDP misses a page Electron creates after it attached**
+  (the local window opens only once the server answers): poll `/json/list`
+  first, then `connect_over_cdp`.
+- **Under xvfb, unset `WAYLAND_DISPLAY` and pass `--ozone-platform=x11`**,
+  or the window goes to the real desktop.
+
+Test: `uv run --with playwright python tests/smoke/desktop_smoke.py`
+(`IX_DESKTOP_URL=http://127.0.0.1:8765/iguanaxterm` adds the window-mode
+checks against the container).
 
 ### How the image is built (2026-09-26)
 

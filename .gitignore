@@ -56,3 +56,6 @@ data/
 # Smoke-test screenshots are debugging aids, not repo content. Scoped rather
 # than a blanket *.png, which would have swallowed appcode/static/el_iguana.png.
 tests/smoke/*.png
+
+# Electron (desktop/install.sh)
+desktop/node_modules/

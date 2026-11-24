@@ -182,6 +182,18 @@ Traps measured writing INSTALL.md:
   WebSockets work through it.
 - `.env.example` used to set `GANXTERM_DATA_DIR=/data` (broke from-source
   runs) and named `PYTINCTURE_*` variables the app never reads.
+- **A dead conmon turned every BFF call into a 500** (2026-11-24). conmon
+  lives in the cgroup of whatever ran `podman start`; when that unit fails or
+  that terminal closes, systemd kills it and the container runs on with no
+  reader on stdout. Python ignores SIGPIPE, so each `print` raised
+  BrokenPipeError, and pytincture prints on every classcall: empty sidebar,
+  no username, `/healthz` still 200, and nothing in `podman logs` after
+  startup. The trigger was `podman-restart.service` failing at boot because
+  *another* container (stackui, keep-id + GPU after an OS update) could not
+  start. `service.PipeSafeStream` now drops output instead of raising; check
+  `[ -d /proc/$(podman inspect iguanaxterm --format '{{.State.ConmonPid}}') ]`
+  when the log goes quiet. Start the container from a systemd unit, never
+  from a terminal you will close.
 
 **After any edit to `../wa_pytincture_widgetset/wapyt/assets/*`:**
 

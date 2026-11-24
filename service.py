@@ -324,8 +324,58 @@ def build_app():
 app = build_app()
 
 
+class PipeSafeStream:
+    """
+    stdout/stderr that drops output instead of raising once nobody reads it.
+
+    In a container stdout is a pipe to conmon. If conmon dies (systemd killed
+    the unit that started it -- 2026-11-24, after a failed podman-restart.service)
+    the container keeps running, but every write raises BrokenPipeError
+    (Python ignores SIGPIPE). pytincture prints on each BFF call, so every
+    classcall became a 500 while /healthz, which prints nothing, stayed 200:
+    an empty sidebar with nothing in the log to say why. Losing log lines is
+    better than failing requests.
+    """
+
+    def __init__(self, stream) -> None:
+        self._stream = stream
+        self.broken = False
+
+    def write(self, data):
+        if self.broken:
+            return len(data)
+        try:
+            return self._stream.write(data)
+        except (BrokenPipeError, ValueError):
+            # ValueError: the underlying file was closed.
+            self.broken = True
+            return len(data)
+
+    def flush(self) -> None:
+        if self.broken:
+            return
+        try:
+            self._stream.flush()
+        except (BrokenPipeError, ValueError):
+            self.broken = True
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+def guard_std_streams() -> None:
+    """Wrap sys.stdout/sys.stderr in PipeSafeStream (idempotent)."""
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name)
+        if stream is not None and not isinstance(stream, PipeSafeStream):
+            setattr(sys, name, PipeSafeStream(stream))
+
+
 if __name__ == "__main__":
     import uvicorn
+
+    # Before uvicorn configures logging, so its handlers hold the guarded streams.
+    guard_std_streams()
 
     print(
         f"""
